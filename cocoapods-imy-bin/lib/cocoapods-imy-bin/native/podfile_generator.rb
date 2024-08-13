@@ -17,9 +17,11 @@ module Pod
       #
       # @param  [Specification] spec
       #
-      alias old_podfile_for_spec podfile_for_spec
+      # cocoapods-generate (2.2.5)这个插件的版本，将
+      # podfile_for_spec 方法改名为 podfile_for_specs
+      alias old_podfile_for_specs podfile_for_specs
 
-      def podfile_for_spec(spec)
+      def podfile_for_specs(spec)
         generator = self
         dir = configuration.gen_dir_for_pod(spec.name)
 
@@ -196,4 +198,3 @@ module Pod
     end
   end
 end
-

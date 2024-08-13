@@ -4,7 +4,10 @@ require 'cocoapods-imy-bin/native/installation_options'
 
 module Pod
   class Installer
-    class PodSourceInstaller
+    # Cocoapods新版本（1.15.2）将 PodSourceInstaller 的
+    # verify_source_is_secure 等方法迁移到 PodSourceDownloader
+    # 所以这里需要修改一下
+    class PodSourceDownloader
       attr_accessor :installation_options
 
       alias old_verify_source_is_secure verify_source_is_secure
