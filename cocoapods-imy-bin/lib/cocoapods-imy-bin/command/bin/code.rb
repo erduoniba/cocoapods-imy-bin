@@ -160,6 +160,9 @@ module Pod
         def get_lib_path(name)
           dir = Pathname.new(File.join(Pathname.pwd,"Pods",name))
           lib_name = "lib#{name}.a"
+          unless File.exist?(lib_name)
+            lib_name = "#{name}"
+          end
           lib_path = File.join(dir,lib_name)
 
           unless File.exist?(lib_path)
