@@ -18,6 +18,8 @@ Gem::Specification.new do |spec|
   #spec.files         = `git ls-files`.split($/)
   spec.executables   = spec.files.grep(%r{^bin/}) { |f| File.basename(f) }
   spec.test_files    = spec.files.grep(%r{^(test|spec|features)/})
+  
+  # ["lib"] 表示 Ruby 将在 gem 的 lib 目录中查找需要加载的文件。
   spec.require_paths = ['lib']
 
   spec.add_dependency 'parallel'
