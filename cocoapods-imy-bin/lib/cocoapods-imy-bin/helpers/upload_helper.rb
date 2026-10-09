@@ -2,6 +2,7 @@
 
 # copy from https://github.com/CocoaPods/cocoapods-packager
 
+require 'open3'
 require 'cocoapods-imy-bin/native/podfile'
 require 'cocoapods/command/gen'
 require 'cocoapods/generate'
@@ -54,16 +55,34 @@ module CBin
           res = File.exist?(zip_file)
         end
         if res
-          command = "curl #{CBin.config.binary_upload_url} -F \"name=#{@spec.name}\" -F \"version=#{@spec.version}\" -F \"annotate=#{@spec.name}_#{@spec.version}_log\" -F \"file=@#{zip_file}\""
-          print <<EOF
-          上传二进制文件
-          #{command}
-EOF
-          upload_result = `#{command}`
-          puts "#{upload_result}"
+          command = curl_arguments(zip_file)
+          puts "上传二进制文件到 #{CBin.config.binary_upload_url}"
+          upload_result, upload_error, status = Open3.capture3(*command)
+          puts upload_result unless upload_result.empty?
+          UI.warn upload_error unless upload_error.empty?
+          res = status.success?
         end
 
         res
+      end
+
+      def curl_arguments(zip_file)
+        arguments = [
+          'curl',
+          '--fail',
+          '--silent',
+          '--show-error',
+          '--request', 'POST',
+          '--form', "name=#{@spec.name}",
+          '--form', "version=#{@spec.version}",
+          '--form', "annotate=#{@spec.name}_#{@spec.version}_log",
+          '--form', "file=@#{zip_file}"
+        ]
+        token = ENV['BINARY_SERVER_TOKEN'].to_s
+        token = CBin.config.binary_upload_token.to_s if token.empty?
+        arguments += ['--header', "Authorization: Bearer #{token}"] unless token.empty?
+        arguments << CBin.config.binary_upload_url
+        arguments
       end
 
 

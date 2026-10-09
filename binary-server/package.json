@@ -1,0 +1,26 @@
+{
+    "name": "binary-server",
+    "version": "0.2.0",
+    "description": "binary server",
+    "main": "app.js",
+    "private": true,
+    "engines": {
+        "node": ">=22.0.0"
+    },
+    "dependencies": {
+        "@koa/multer": "^4.0.0",
+        "@koa/router": "^15.7.0",
+        "koa": "^3.2.1",
+        "mongoose": "^9.9.5"
+    },
+    "scripts": {
+        "test": "node --test",
+        "start": "node app.js"
+    },
+    "keywords": [
+        "binary",
+        "server"
+    ],
+    "author": "tripleCC",
+    "license": "MIT"
+}

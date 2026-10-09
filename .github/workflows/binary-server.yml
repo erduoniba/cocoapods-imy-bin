@@ -1,0 +1,34 @@
+name: Binary Server
+
+on:
+  pull_request:
+    paths:
+      - 'binary-server/**'
+      - '.github/workflows/binary-server.yml'
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'binary-server/**'
+      - '.github/workflows/binary-server.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: binary-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: binary-server/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=low
