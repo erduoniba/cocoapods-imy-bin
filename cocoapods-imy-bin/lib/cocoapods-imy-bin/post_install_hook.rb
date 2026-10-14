@@ -59,7 +59,7 @@ module Pod
       podfile = Pod::Config.instance.podfile
 
 
-      if podfile && podfile.use_hmap?
+      if podfile && podfile.respond_to?(:use_hmap?) && podfile.use_hmap?
         UI.info "[#] use hmap for this project"
         post_context.aggregate_targets.each do |one|
             hmap = Hash.new
