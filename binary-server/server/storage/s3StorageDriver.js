@@ -7,15 +7,30 @@ const os = require('os')
 const StorageDriver = require('./storageDriver')
 const { validateSegment } = require('./localStorageDriver')
 
+function hmac(key, data, encoding) {
+  return crypto.createHmac('sha256', key).update(data, 'utf8').digest(encoding)
+}
+
+function sha256Hex(data) {
+  return crypto.createHash('sha256').update(data, 'utf8').digest('hex')
+}
+
+function deriveSigningKey(secretAccessKey, dateStamp, region, service = 's3') {
+  const kDate = hmac(`AWS4${secretAccessKey}`, dateStamp)
+  const kRegion = hmac(kDate, region)
+  const kService = hmac(kRegion, service)
+  return hmac(kService, 'aws4_request')
+}
+
 class S3StorageDriver extends StorageDriver {
   constructor(options = {}) {
     super()
-    this.endpoint = options.endpoint || process.env.S3_ENDPOINT || 'http://127.0.0.1:9000'
+    this.endpoint = (options.endpoint || process.env.S3_ENDPOINT || 'http://127.0.0.1:9000').replace(/\/+$/, '')
     this.bucket = options.bucket || process.env.S3_BUCKET || 'binary-artifacts'
     this.region = options.region || process.env.S3_REGION || 'us-east-1'
-    this.accessKeyId = options.accessKeyId || process.env.S3_ACCESS_KEY || ''
-    this.secretAccessKey = options.secretAccessKey || process.env.S3_SECRET_KEY || ''
-    this.tempRoot = path.join(os.tmpdir(), '.s3-uploads')
+    this.accessKeyId = options.accessKeyId || process.env.S3_ACCESS_KEY || 'minioadmin'
+    this.secretAccessKey = options.secretAccessKey || process.env.S3_SECRET_KEY || 'minioadmin'
+    this.tempRoot = options.tempRoot || path.join(os.tmpdir(), '.s3-uploads')
     this.remoteIndex = new Map()
   }
 
@@ -85,9 +100,44 @@ class S3StorageDriver extends StorageDriver {
     return entry ? entry.path : null
   }
 
-  getPresignedDownloadUrl(name, version, expiresIn = 3600) {
+  getPresignedDownloadUrl(name, version, expiresIn = 3600, now = new Date()) {
     const key = this.artifactKey(name, version)
-    return `${this.endpoint}/${this.bucket}/${key}?X-Amz-Expires=${expiresIn}`
+    const iso = now.toISOString().replace(/[:-]|\.\d{3}/g, '')
+    const dateStamp = iso.slice(0, 8)
+    const credentialScope = `${dateStamp}/${this.region}/s3/aws4_request`
+    const credential = `${this.accessKeyId}/${credentialScope}`
+
+    const parsedUrl = new URL(`${this.endpoint}/${this.bucket}/${key}`)
+    const queryParams = new URLSearchParams({
+      'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+      'X-Amz-Credential': credential,
+      'X-Amz-Date': iso,
+      'X-Amz-Expires': String(expiresIn),
+      'X-Amz-SignedHeaders': 'host',
+    })
+    queryParams.sort()
+
+    const canonicalRequest = [
+      'GET',
+      parsedUrl.pathname,
+      queryParams.toString(),
+      `host:${parsedUrl.host}\n`,
+      'host',
+      'UNSIGNED-PAYLOAD',
+    ].join('\n')
+
+    const stringToSign = [
+      'AWS4-HMAC-SHA256',
+      iso,
+      credentialScope,
+      sha256Hex(canonicalRequest),
+    ].join('\n')
+
+    const signingKey = deriveSigningKey(this.secretAccessKey, dateStamp, this.region, 's3')
+    const signature = hmac(signingKey, stringToSign, 'hex')
+    queryParams.set('X-Amz-Signature', signature)
+
+    return `${parsedUrl.origin}${parsedUrl.pathname}?${queryParams.toString()}`
   }
 }
 

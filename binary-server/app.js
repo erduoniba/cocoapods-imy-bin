@@ -12,11 +12,13 @@ const Project = require('./server/models/project')
 const ProjectPolicyRevision = require('./server/models/project_policy')
 const AuditEvent = require('./server/models/audit_event')
 const { createPlatformRouter } = require('./server/platform/routes')
+const { createEnterpriseRouter } = require('./server/enterprise/dashboard')
 
 function createApp(config = loadConfig()) {
   const app = new Koa()
   const storage = createStorage(config.storageRoot)
   const router = createRouter({ config, storage })
+  const enterprise = createEnterpriseRouter({ config, storage })
 
   app.context.config = config
   app.context.storage = storage
@@ -24,6 +26,8 @@ function createApp(config = loadConfig()) {
   app.use(securityHeaders)
   app.use(router.routes())
   app.use(router.allowedMethods())
+  app.use(enterprise.routes())
+  app.use(enterprise.allowedMethods())
   if (config.platformEnabled) {
     const platform = createPlatformRouter({ config, storage })
     app.use(platform.routes())

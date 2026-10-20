@@ -1104,6 +1104,11 @@ private struct BinaryServerView: View {
                             Button("连接并刷新") { model.refreshBinaryServer() }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(model.isRefreshingBinaryServer)
+                            Button {
+                                model.openWebControlPlane()
+                            } label: {
+                                Label("打开 Web 管控大盘", systemImage: "safari")
+                            }
                         }
                         if model.isRefreshingBinaryServer {
                             ProgressView("正在读取 /frameworks …")
@@ -1946,6 +1951,7 @@ private struct ModeBadge: View {
         case "local": base = "LOCAL 本地源码"
         case "source": base = "SOURCE 版本源码"
         case "binary": base = "BINARY 二进制"
+        case "branch": base = "BRANCH 远端分支"
         default: base = mode.uppercased()
         }
         return isOverride ? "\(base) · 配置表" : base
@@ -1956,6 +1962,7 @@ private struct ModeBadge: View {
         case "local": .blue
         case "source": .orange
         case "binary": .green
+        case "branch": .purple
         default: .secondary
         }
     }

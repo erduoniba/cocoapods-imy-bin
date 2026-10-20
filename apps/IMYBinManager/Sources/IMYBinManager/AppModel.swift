@@ -174,6 +174,17 @@ final class AppModel: ObservableObject {
         refreshToolchain()
         refreshRecents()
         refreshCacheSizes()
+        if let lastWorkspace = recentWorkspaces.first,
+           FileManager.default.fileExists(atPath: lastWorkspace.url.path) {
+            inspectProject(lastWorkspace.url, navigateToOverview: false)
+        }
+    }
+
+    func openWebControlPlane() {
+        let base = binaryServerAddress.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        if let url = URL(string: "\(base)/dashboard") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     var hostAppDirectories: [URL] {
