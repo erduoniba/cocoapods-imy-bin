@@ -1,4 +1,5 @@
 require 'cocoapods-imy-bin/pod_modes'
+require 'cocoapods-imy-bin/component_config'
 require 'cocoapods-imy-bin/command/bin/install'
 
 module Pod
@@ -57,21 +58,24 @@ module Pod
           root = config.installation_root
           if @reset
             CBin::PodModes.reset(root)
+            sync_component_config(root, reset: true)
             UI.puts "已清除本地组件模式覆盖；#{@install ? '开始安装' : '运行 pod bin install 后生效'}."
           elsif @all
             names = target_component_names
             modes = names.each_with_object({}) { |pod_name, acc| acc[pod_name] = @mode }
             CBin::PodModes.write(root, modes)
+            sync_component_config(root, modes: modes)
             UI.puts "已将全部组件 (#{names.join(', ')}) 设置为 #{@mode}；#{@install ? '开始安装' : '运行 pod bin install 后生效'}."
           else
             modes = CBin::PodModes.read(root)
             modes[@name] = @mode
             CBin::PodModes.write(root, modes)
+            sync_component_config(root, modes: { @name => @mode })
             UI.puts "#{@name} 已设置为 #{@mode}；#{@install ? '开始安装' : '运行 pod bin install 后生效'}."
           end
 
           if @install
-            # 清除缓存的 Podfile，使 Install 重新按更新后的 .imy-bin-modes.yml 解析 imy_pod。
+            # 清除缓存的 Podfile，使 Install 重新按更新后的配置表或 .imy-bin-modes.yml 解析。
             config.instance_variable_set(:@podfile, nil)
             command = Install.new(CLAide::ARGV.new([]))
             command.validate!
@@ -80,6 +84,23 @@ module Pod
         end
 
         private
+
+        def sync_component_config(root, modes: {}, reset: false)
+          return unless CBin::ComponentConfig.exist?(root)
+
+          payload = CBin::ComponentConfig.read(root)
+          return unless payload
+
+          default_mode = payload['defaultMode'] || 'binary'
+          payload['components'].each do |entry|
+            if reset
+              entry['mode'] = default_mode
+            elsif modes.key?(entry['name'])
+              entry['mode'] = modes[entry['name']]
+            end
+          end
+          CBin::ComponentConfig.write(root, payload)
+        end
 
         def target_component_names
           podfile = config.podfile

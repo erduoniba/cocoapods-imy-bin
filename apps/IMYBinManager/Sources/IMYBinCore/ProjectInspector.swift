@@ -50,7 +50,7 @@ public struct ProjectInspector {
             }
         }
 
-        // Also discover podspecs referenced via :path in discovered Podfiles (e.g., when opening HDImyBinApp directly)
+        // Also discover podspecs referenced via :path in discovered Podfiles or in sibling component directories
         for appDir in appDirMap.values {
             let deps = PodfileComponentInspector.inspect(from: appDir)
             for dep in deps {
@@ -59,6 +59,27 @@ public struct ProjectInspector {
                 if let extraSpecs = try? topLevelPodspecs(in: compDir) {
                     for spec in extraSpecs {
                         podspecMap[spec.path] = spec
+                    }
+                }
+            }
+            let podfileURL = appDir.appendingPathComponent("Podfile")
+            if let podfileText = try? String(contentsOf: podfileURL, encoding: .utf8),
+               podfileText.contains("imy_bin_config_dependencies") {
+                let parentURL = appDir.standardizedFileURL.deletingLastPathComponent()
+                if let siblings = try? fileManager.contentsOfDirectory(
+                    at: parentURL,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                ) {
+                    for sibling in siblings {
+                        let stdSibling = sibling.standardizedFileURL
+                        guard !excludedNames.contains(stdSibling.lastPathComponent),
+                              stdSibling.path != appDir.standardizedFileURL.path else { continue }
+                        if let extraSpecs = try? topLevelPodspecs(in: stdSibling) {
+                            for spec in extraSpecs {
+                                podspecMap[spec.path] = spec
+                            }
+                        }
                     }
                 }
             }
@@ -77,8 +98,10 @@ public struct ProjectInspector {
                     let stdSibling = sibling.standardizedFileURL
                     guard !excludedNames.contains(stdSibling.lastPathComponent),
                           exists("Podfile", in: stdSibling) else { continue }
+                    let siblingPodfile = (try? String(contentsOf: stdSibling.appendingPathComponent("Podfile"), encoding: .utf8)) ?? ""
                     let siblingDeps = PodfileComponentInspector.inspect(from: stdSibling)
-                    if siblingDeps.contains(where: { componentNames.contains($0.name) }) {
+                    if siblingPodfile.contains("imy_bin_config_dependencies")
+                        || siblingDeps.contains(where: { componentNames.contains($0.name) }) {
                         appDirMap[stdSibling.path] = stdSibling
                     }
                 }

@@ -16,7 +16,7 @@ final class AppModel: ObservableObject {
         var title: String {
             switch self {
             case .overview: "工作台概览"
-            case .dependencies: "App 依赖与安装"
+            case .dependencies: "App 配置表与安装"
             case .build: "组件发布管理"
             case .server: "制品服务"
             case .logs: "运行日志"
@@ -26,7 +26,7 @@ final class AppModel: ObservableObject {
         var systemImage: String {
             switch self {
             case .overview: "rectangle.3.group"
-            case .dependencies: "square.3.layers.3d"
+            case .dependencies: "tablecells"
             case .build: "paperplane.fill"
             case .server: "shippingbox"
             case .logs: "terminal"
@@ -55,6 +55,8 @@ final class AppModel: ObservableObject {
     @Published var autoCommitVersionBump = true
     @Published var autoInstallAfterSwitch = false
 
+    @Published var configTable: ComponentConfigTable?
+    @Published private(set) var hasSavedConfigTable = false
     @Published private(set) var localComponents: [LocalComponentDependency] = []
     @Published private(set) var managedPolicy: ManagedPolicySnapshot?
     @Published var managedPolicyError: String?
@@ -127,6 +129,11 @@ final class AppModel: ObservableObject {
             ?? componentPodspecs.first
     }
 
+    var configTableFileURL: URL? {
+        guard let appDir = selectedAppDirectory ?? project?.primaryAppDirectory else { return nil }
+        return ComponentConfigTable.fileURL(in: appDir)
+    }
+
     func publishedVersions(for componentName: String) -> [String] {
         binaryComponents.first { $0.name == componentName }?.versions ?? []
     }
@@ -188,12 +195,26 @@ final class AppModel: ObservableObject {
 
     private func reloadAppDirectoryState() {
         guard let appDir = selectedAppDirectory ?? project?.primaryAppDirectory else {
+            configTable = nil
+            hasSavedConfigTable = false
             localComponents = []
             managedPolicy = nil
             managedPolicyError = nil
             return
         }
-        localComponents = PodfileComponentInspector.inspect(from: appDir)
+        let table = ComponentConfigTable.loadOrBootstrap(from: appDir, workspacePodspecs: componentPodspecs)
+        configTable = table
+        hasSavedConfigTable = ComponentConfigTable.exists(in: appDir)
+        localComponents = table.components.map { entry in
+            LocalComponentDependency(
+                name: entry.name,
+                declaredVersion: entry.version,
+                localPath: entry.path,
+                effectiveMode: entry.mode,
+                overrideMode: hasSavedConfigTable ? entry.mode : nil
+            )
+        }
+
         do {
             managedPolicy = try ManagedPolicySnapshot.read(from: appDir)
             managedPolicyError = nil
@@ -208,6 +229,46 @@ final class AppModel: ObservableObject {
             managedPolicy = nil
             managedPolicyError = error.localizedDescription
         }
+    }
+
+    @discardableResult
+    func saveConfigTable() -> Bool {
+        guard let appDir = requireAppDirectory() else { return false }
+        let table = configTable ?? ComponentConfigTable.loadOrBootstrap(from: appDir, workspacePodspecs: componentPodspecs)
+        do {
+            try table.write(to: appDir)
+            reloadAppDirectoryState()
+            return true
+        } catch {
+            alertMessage = "写入配置表失败：\(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func saveConfigTableAndInstall() {
+        guard saveConfigTable() else { return }
+        runInstall()
+    }
+
+    func updateConfigEntryVersion(_ componentName: String, to version: String) {
+        guard var table = configTable,
+              let idx = table.components.firstIndex(where: { $0.name == componentName }) else { return }
+        table.components[idx].version = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        configTable = table
+        _ = saveConfigTable()
+    }
+
+    func updateConfigEntryEnabled(_ componentName: String, enabled: Bool) {
+        guard var table = configTable,
+              let idx = table.components.firstIndex(where: { $0.name == componentName }) else { return }
+        table.components[idx].enabled = enabled
+        configTable = table
+        _ = saveConfigTable()
+    }
+
+    func syncConfigVersionFromLocalPodspec(_ componentName: String) {
+        guard let local = localPodspecInfo(named: componentName) else { return }
+        updateConfigEntryVersion(componentName, to: local.version)
     }
 
     private func syncEditingVersionFromSelectedPodspec() {
@@ -243,8 +304,9 @@ final class AppModel: ObservableObject {
         do {
             try PodspecInspector.updateVersion(in: info.podspecURL, to: targetVersion)
             if syncVersionToAppPodfile, let appDir = selectedAppDirectory ?? project?.primaryAppDirectory {
-                _ = try? PodfileComponentInspector.updateDependencyVersion(
+                _ = try? ComponentConfigTable.updateComponentVersion(
                     in: appDir,
+                    workspacePodspecs: componentPodspecs,
                     component: info.name,
                     to: targetVersion
                 )
@@ -272,15 +334,16 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            let updated = try PodfileComponentInspector.updateDependencyVersion(
+            let updated = try ComponentConfigTable.updateComponentVersion(
                 in: appDir,
+                workspacePodspecs: componentPodspecs,
                 component: info.name,
                 to: info.version
             )
             if updated {
                 refreshProject()
             } else {
-                alertMessage = "在 \(appDir.lastPathComponent)/Podfile 中未找到 \(info.name) 的版本声明"
+                alertMessage = "在配置表中未找到组件 \(info.name)"
             }
         } catch {
             alertMessage = error.localizedDescription
@@ -327,16 +390,19 @@ final class AppModel: ObservableObject {
 
     func runInstall() {
         guard let appDir = requireAppDirectory() else { return }
+        _ = saveConfigTable()
         run([BinCommandBuilder.install()], in: appDir)
     }
 
     func runUpdate() {
         guard let appDir = requireAppDirectory() else { return }
+        _ = saveConfigTable()
         run([BinCommandBuilder.update()], in: appDir)
     }
 
     func runStatus() {
         guard let appDir = requireAppDirectory() else { return }
+        _ = saveConfigTable()
         run([BinCommandBuilder.status()], in: appDir)
     }
 
@@ -370,6 +436,12 @@ final class AppModel: ObservableObject {
 
     func switchLocalComponent(_ componentName: String, to mode: String) {
         guard let appDir = requireAppDirectory() else { return }
+        if var table = configTable,
+           let idx = table.components.firstIndex(where: { $0.name == componentName }) {
+            table.components[idx].mode = mode
+            configTable = table
+            _ = saveConfigTable()
+        }
         var commands = [BinCommandBuilder.switchMode(component: componentName, mode: mode)]
         if autoInstallAfterSwitch {
             commands.append(BinCommandBuilder.install())
@@ -379,6 +451,15 @@ final class AppModel: ObservableObject {
 
     func switchAllComponents(to mode: String) {
         guard let appDir = requireAppDirectory() else { return }
+        if var table = configTable {
+            for idx in table.components.indices {
+                if mode == "local" && !table.components[idx].supportsLocal { continue }
+                table.components[idx].mode = mode
+            }
+            table.defaultMode = mode
+            configTable = table
+            _ = saveConfigTable()
+        }
         var commands = [BinCommandBuilder.switchAll(mode: mode)]
         if autoInstallAfterSwitch {
             commands.append(BinCommandBuilder.install())
@@ -388,6 +469,14 @@ final class AppModel: ObservableObject {
 
     func resetComponentModes() {
         guard let appDir = requireAppDirectory() else { return }
+        if var table = configTable {
+            for idx in table.components.indices {
+                table.components[idx].mode = "binary"
+            }
+            table.defaultMode = "binary"
+            configTable = table
+            _ = saveConfigTable()
+        }
         var commands = [BinCommandBuilder.resetModes()]
         if autoInstallAfterSwitch {
             commands.append(BinCommandBuilder.install())

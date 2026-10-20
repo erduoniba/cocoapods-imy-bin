@@ -184,13 +184,13 @@ private struct ManagedDependenciesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("App 依赖与安装管理")
+                    Text("App 依赖配置表与安装")
                         .font(.largeTitle.bold())
-                    Text("管理宿主 App 的 Podfile 组件依赖模式（local / source / binary），并一键执行 pod bin install / update。")
+                    Text("由 IMYBinManager 生成配置表（.imy-bin-config.json）驱动安装，保持 Podfile 零修改，彻底避免多人协作时的 Podfile 冲突。")
                         .foregroundStyle(.secondary)
                 }
 
-                GroupBox("目标 App 工程与依赖安装") {
+                GroupBox("宿主 App 与配置表操作") {
                     VStack(alignment: .leading, spacing: 12) {
                         if let project = model.project, !project.appDirectories.isEmpty {
                             HStack {
@@ -201,6 +201,19 @@ private struct ManagedDependenciesView: View {
                                 }
                                 Button("刷新") { model.refreshProject() }
                             }
+                            if let configURL = model.configTableFileURL {
+                                HStack(spacing: 8) {
+                                    Label(
+                                        model.hasSavedConfigTable ? "已生成配置表：\(configURL.path)" : "待生成配置表：\(configURL.path)",
+                                        systemImage: model.hasSavedConfigTable ? "checkmark.circle.fill" : "doc.badge.plus"
+                                    )
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(model.hasSavedConfigTable ? .green : .secondary)
+                                    Spacer()
+                                    Button("仅保存配置表") { _ = model.saveConfigTable() }
+                                        .controlSize(.small)
+                                }
+                            }
                         } else {
                             EmptyHint(text: "当前工作区未检测到包含 Podfile 的 App 目录。")
                         }
@@ -208,7 +221,7 @@ private struct ManagedDependenciesView: View {
                         Divider()
 
                         HStack(spacing: 12) {
-                            Button("安装依赖 (pod bin install)") { model.runInstall() }
+                            Button("生成配置表并安装 (pod bin install)") { model.saveConfigTableAndInstall() }
                                 .buttonStyle(.borderedProminent)
                             Button("更新依赖 (pod bin update)") { model.runUpdate() }
                             Button("查询依赖状态 (pod bin status)") { model.runStatus() }
@@ -220,61 +233,26 @@ private struct ManagedDependenciesView: View {
                     .padding(.top, 6)
                 }
 
-                GroupBox("Podfile 组件依赖（.imy-bin-modes.yml）") {
+                GroupBox("组件依赖配置表（.imy-bin-config.json）") {
                     VStack(alignment: .leading, spacing: 12) {
-                        if model.localComponents.isEmpty {
-                            EmptyHint(text: "当前 App 的 Podfile 中未检测到可切换的组件声明。")
-                        } else {
+                        if let entries = model.configTable?.components, !entries.isEmpty {
                             HStack(spacing: 10) {
-                                Text("全局切换：").font(.subheadline.bold())
+                                Text("全局模式：").font(.subheadline.bold())
                                 Button("全部本地 (local)") { model.switchAllComponents(to: "local") }
                                 Button("全部源码 (source)") { model.switchAllComponents(to: "source") }
                                 Button("全部二进制 (binary)") { model.switchAllComponents(to: "binary") }
                                 Spacer()
-                                Button("重置本地覆盖 (--reset)") { model.resetComponentModes() }
+                                Button("重置为默认二进制 (--reset)") { model.resetComponentModes() }
                             }
                             Divider()
-                            ForEach(model.localComponents) { item in
-                                HStack(alignment: .center, spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack(spacing: 8) {
-                                            Text(item.name).font(.headline)
-                                            ModeBadge(mode: item.effectiveMode, isOverride: item.overrideMode != nil)
-                                            if let declared = item.declaredVersion,
-                                               model.binaryServerCheckedAt != nil {
-                                                let available = model.isVersionPublished(componentName: item.name, version: declared)
-                                                Text(available ? "二进制已就绪" : "二进制未发布")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(available ? .green : .orange)
-                                            }
-                                        }
-                                        Text(
-                                            "Podfile 版本：\(item.declaredVersion ?? "未固定")"
-                                            + (model.localPodspecInfo(named: item.name).map { " · 本地 podspec：\($0.version)" } ?? "")
-                                            + (item.localPath.map { " · path: \($0)" } ?? "")
-                                        )
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Button("本地") { model.switchLocalComponent(item.name, to: "local") }
-                                        .disabled(!item.supportsLocal || item.effectiveMode == "local")
-                                    Button("源码") { model.switchLocalComponent(item.name, to: "source") }
-                                        .disabled(item.effectiveMode == "source")
-                                    Button("二进制") { model.switchLocalComponent(item.name, to: "binary") }
-                                        .disabled(item.effectiveMode == "binary")
-                                    if model.localPodspecInfo(named: item.name) != nil {
-                                        Button("去发布…") {
-                                            model.navigateToPublish(componentName: item.name)
-                                        }
-                                        .controlSize(.small)
-                                    }
-                                }
-                                .padding(.vertical, 4)
-                                if item.id != model.localComponents.last?.id {
+                            ForEach(entries) { entry in
+                                ComponentConfigRowView(entry: entry)
+                                if entry.id != entries.last?.id {
                                     Divider()
                                 }
                             }
+                        } else {
+                            EmptyHint(text: "当前 App 尚未配置组件依赖。")
                         }
                     }
                     .padding(.top, 6)
@@ -294,39 +272,110 @@ private struct ManagedDependenciesView: View {
                         }
                     }
                 }
-                if let policy = model.managedPolicy {
-                    Text("\(policy.project) · 版本 \(policy.revision)")
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                    ForEach(policy.targets) { target in
-                        GroupBox(target.name) {
-                            if target.dependencies.isEmpty {
-                                EmptyHint(text: "该 target 没有平台托管的内部组件。")
-                            } else {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    ForEach(target.dependencies) { dependency in
-                                        HStack {
-                                            VStack(alignment: .leading) {
-                                                Text(dependency.name).font(.headline)
-                                                Text("\(dependency.version) · 团队策略：\(dependency.mode)")
-                                                    .font(.caption.monospaced())
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                            Spacer()
-                                            Button("本地源码") { model.switchMode(dependency, to: "source") }
-                                            Button("本地二进制") { model.switchMode(dependency, to: "binary") }
-                                        }
-                                        Divider()
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
             }
             .padding(24)
         }
         .disabled(model.project == nil || model.isRunning)
+    }
+}
+
+private struct ComponentConfigRowView: View {
+    @EnvironmentObject private var model: AppModel
+    let entry: ComponentConfigEntry
+    @State private var versionDraft: String = ""
+
+    var body: some View {
+        let localInfo = model.localPodspecInfo(named: entry.name)
+        let remoteVersions = model.publishedVersions(for: entry.name)
+
+        HStack(alignment: .center, spacing: 12) {
+            Toggle("", isOn: Binding(
+                get: { entry.enabled },
+                set: { model.updateConfigEntryEnabled(entry.name, enabled: $0) }
+            ))
+            .labelsHidden()
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(entry.name)
+                        .font(.headline)
+                        .strikethrough(!entry.enabled)
+                    ModeBadge(mode: entry.mode, isOverride: model.hasSavedConfigTable)
+                    if let ver = entry.version, !ver.isEmpty, model.binaryServerCheckedAt != nil {
+                        let available = model.isVersionPublished(componentName: entry.name, version: ver)
+                        Text(available ? "二进制已就绪" : "二进制未发布")
+                            .font(.caption2)
+                            .foregroundStyle(available ? .green : .orange)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    Text("配置版本:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("版本", text: $versionDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospaced())
+                        .frame(width: 90)
+                        .onSubmit {
+                            model.updateConfigEntryVersion(entry.name, to: versionDraft)
+                        }
+                    if versionDraft != (entry.version ?? "") {
+                        Button("保存版本") {
+                            model.updateConfigEntryVersion(entry.name, to: versionDraft)
+                        }
+                        .controlSize(.mini)
+                    }
+                    if let localInfo, localInfo.version != entry.version {
+                        Button("用本地版 (\(localInfo.version))") {
+                            versionDraft = localInfo.version
+                            model.syncConfigVersionFromLocalPodspec(entry.name)
+                        }
+                        .controlSize(.mini)
+                    }
+                    if !remoteVersions.isEmpty {
+                        Menu("选已发布版本") {
+                            ForEach(remoteVersions, id: \.self) { v in
+                                Button(v) {
+                                    versionDraft = v
+                                    model.updateConfigEntryVersion(entry.name, to: v)
+                                }
+                            }
+                        }
+                        .controlSize(.mini)
+                        .frame(width: 110)
+                    }
+                    if let path = entry.path {
+                        Text("path: \(path)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Spacer()
+
+            Button("本地") { model.switchLocalComponent(entry.name, to: "local") }
+                .disabled(!entry.supportsLocal || entry.mode == "local")
+            Button("源码") { model.switchLocalComponent(entry.name, to: "source") }
+                .disabled(entry.mode == "source")
+            Button("二进制") { model.switchLocalComponent(entry.name, to: "binary") }
+                .disabled(entry.mode == "binary")
+
+            if localInfo != nil {
+                Button("去发布…") {
+                    model.navigateToPublish(componentName: entry.name)
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 4)
+        .onAppear {
+            versionDraft = entry.version ?? ""
+        }
+        .onChange(of: entry.version) { newValue in
+            versionDraft = newValue ?? ""
+        }
     }
 }
 
@@ -436,7 +485,7 @@ private struct ComponentPublishView: View {
                             }
 
                             HStack(spacing: 20) {
-                                Toggle("同时更新宿主 App Podfile 中的组件版本", isOn: $model.syncVersionToAppPodfile)
+                                Toggle("同时更新宿主 App 配置表（.imy-bin-config.json，不修改 Podfile）", isOn: $model.syncVersionToAppPodfile)
                                 Toggle("保存版本后自动提交到组件 Git 仓库", isOn: $model.autoCommitVersionBump)
                             }
                             .font(.caption)
@@ -449,7 +498,7 @@ private struct ComponentPublishView: View {
                                     model.editingComponentVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                     || model.editingComponentVersion.trimmingCharacters(in: .whitespacesAndNewlines) == info.version
                                 )
-                                Button("同步当前版本 (\(info.version)) 到 App Podfile") {
+                                Button("同步当前版本 (\(info.version)) 到 App 配置表") {
                                     model.syncSelectedComponentVersionToPodfile()
                                 }
                             }
@@ -587,6 +636,11 @@ private struct OverviewView: View {
                                 success: !project.appDirectories.isEmpty
                             )
                             StatusRow(
+                                title: "App 依赖配置表 (.imy-bin-config.json)",
+                                value: model.hasSavedConfigTable ? "已生成（Podfile 免修改）" : "未生成（将在安装或切换时自动生成）",
+                                success: true
+                            )
+                            StatusRow(
                                 title: "Podfile.lock",
                                 value: project.hasLockfile ? "已生成" : "未生成",
                                 success: project.hasLockfile
@@ -599,7 +653,7 @@ private struct OverviewView: View {
                                 success: !model.componentPodspecs.isEmpty
                             )
                             HStack(spacing: 12) {
-                                Button("管理 App 依赖与安装") { model.selection = .dependencies }
+                                Button("管理 App 配置表与安装") { model.selection = .dependencies }
                                     .disabled(project.appDirectories.isEmpty)
                                 Button("管理组件发布") { model.selection = .build }
                                     .buttonStyle(.borderedProminent)
@@ -676,7 +730,7 @@ private struct OverviewView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("CocoaPods 组件化与二进制工作台")
                 .font(.largeTitle.bold())
-            Text("一站式管理 App 依赖三态切换安装（local / source / binary）与组件 XCFramework 发布。")
+            Text("基于 .imy-bin-config.json 配置表驱动 App 依赖安装（零 Podfile 冲突），并管理组件 XCFramework 发布。")
                 .foregroundStyle(.secondary)
         }
     }
@@ -757,9 +811,9 @@ private struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("组件发布与依赖切换") {
-                Label("已启用 pod bin publish 事务发布与三态切换", systemImage: "checkmark.shield")
-                Text("支持在「组件发布管理」页面递增版本、预检、构建真机+模拟器 XCFramework 并发布至源码/二进制 Spec 仓库与 binary-server，在「App 依赖与安装」页面一键切换 local / source / binary 并安装。")
+            Section("配置表驱动安装（防止 Podfile 冲突）") {
+                Label("通过 .imy-bin-config.json 管理组件版本、模式与本地路径", systemImage: "tablecells.badge.ellipsis")
+                Text("宿主 App 的 Podfile 只需声明 `imy_bin_config_dependencies`，无需写死组件版本号或本地路径。组件升级版本或切换 local / source / binary 时仅更新 .imy-bin-config.json，不再修改 Podfile。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -790,7 +844,7 @@ private struct ModeBadge: View {
         case "binary": base = "BINARY 二进制"
         default: base = mode.uppercased()
         }
-        return isOverride ? "\(base) · 覆盖" : base
+        return isOverride ? "\(base) · 配置表" : base
     }
 
     private var color: Color {

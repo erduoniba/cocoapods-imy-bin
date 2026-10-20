@@ -3,6 +3,7 @@
 require 'cocoapods'
 require 'cocoapods-imy-bin/native/podfile_env'
 require 'cocoapods-imy-bin/pod_modes'
+require 'cocoapods-imy-bin/component_config'
 require 'cocoapods-imy-bin/managed_policy'
 
 module Pod
@@ -49,21 +50,51 @@ module Pod
         version = requirements.first
         root_name = Specification.root_name(name)
 
+        if (config_entry = component_config_entry(root_name))
+          return if config_entry['enabled'] == false
+
+          version = config_entry['version'] if config_entry['version'] && !config_entry['version'].empty?
+          local_path = config_entry['path'] if config_entry['path'] && !config_entry['path'].empty?
+          component_config_modes[root_name] = config_entry['mode'] if config_entry['mode']
+        end
+
         imy_pod_definitions[root_name] = {
           'name' => root_name,
           'version' => version&.to_s,
           'path' => local_path&.to_s
         }
 
-        mode = binary_mode_overrides[root_name] || ENV['IMY_POD_MODE']
+        mode = binary_mode_overrides[root_name] || component_config_modes[root_name] || ENV['IMY_POD_MODE']
         if mode == 'local'
           raise Informative, "#{root_name} 未声明本地 :path，无法使用 local 模式." if local_path.to_s.empty?
 
           pod(name, options.merge(:path => local_path))
         else
-          args = requirements.dup
+          args = []
+          args << version if version && !version.to_s.empty?
+          args.concat(requirements.drop(1)) if requirements.size > 1
           args << options unless options.empty?
           pod(name, *args)
+        end
+      end
+
+      # 从配置表（.imy-bin-config.json，若未生成则从工作区组件推导）加载全部组件依赖，保持 Podfile 零修改、无冲突。
+      def imy_bin_config_dependencies
+        valid_bin_plugin
+        root = defined_in_file ? defined_in_file.dirname : Pod::Config.instance.installation_root
+        default_mode = use_binaries? ? 'binary' : 'source'
+        config = CBin::ComponentConfig.load_or_bootstrap(root, default_mode: default_mode)
+        config['components'].each do |entry|
+          next if entry['enabled'] == false
+
+          name = entry['name']
+          version = entry['version']
+          local_path = entry['path']
+          component_config_modes[name] = entry['mode'] if entry['mode']
+          args = []
+          args << version if version && !version.empty?
+          args << { :path => local_path } if local_path && !local_path.empty?
+          imy_pod(name, *args)
         end
       end
 
@@ -128,6 +159,21 @@ module Pod
       @imy_bin_managed_policy_modes ||= {}
     end
 
+    def component_config_modes
+      @imy_bin_component_config_modes ||= begin
+        project_root = defined_in_file ? defined_in_file.dirname : Pod::Config.instance.installation_root
+        CBin::ComponentConfig.modes_map(project_root)
+      end
+    end
+
+    def component_config_entry(name)
+      project_root = defined_in_file ? defined_in_file.dirname : Pod::Config.instance.installation_root
+      config = CBin::ComponentConfig.read(project_root)
+      return nil unless config
+
+      config['components'].find { |item| item['name'] == name }
+    end
+
     def imy_pod_definitions
       @imy_pod_definitions ||= {}
     end
@@ -145,7 +191,7 @@ module Pod
     end
 
     def effective_mode_overrides
-      managed_policy_modes.merge(binary_mode_overrides)
+      managed_policy_modes.merge(component_config_modes).merge(binary_mode_overrides)
     end
 
     def use_binary_for_spec?(rspec, overrides = effective_mode_overrides)

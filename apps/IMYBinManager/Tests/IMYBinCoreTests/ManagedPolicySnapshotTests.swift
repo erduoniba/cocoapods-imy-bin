@@ -56,4 +56,9 @@ import Testing
     #expect(updated)
     let reloaded = PodfileComponentInspector.inspect(from: directory)
     #expect(reloaded[0].declaredVersion == "0.1.2")
+
+    // Verify Podfile itself was NOT modified (preventing Git conflicts on Podfile)
+    let podfileAfter = try String(contentsOf: directory.appendingPathComponent("Podfile"), encoding: .utf8)
+    #expect(podfileAfter == podfile)
+    #expect(ComponentConfigTable.exists(in: directory))
 }

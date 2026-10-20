@@ -101,5 +101,46 @@ module Pod
         CBin::PodModes.read(root).should == {}
       end
     end
+
+    it 'loads dependencies from .imy-bin-config.json via imy_bin_config_dependencies without modifying Podfile' do
+      Dir.mktmpdir do |root|
+        podfile_path = File.join(root, 'Podfile')
+        File.write(podfile_path, <<~RUBY)
+          plugin 'cocoapods-imy-bin'
+          use_binaries!
+          target 'Demo' do
+            imy_bin_config_dependencies
+          end
+        RUBY
+        CBin::ComponentConfig.write(root, {
+          'version' => 1,
+          'project' => 'Demo',
+          'environment' => 'dev',
+          'defaultMode' => 'binary',
+          'components' => [
+            { 'name' => 'HDDynamicPod', 'version' => '0.1.2', 'mode' => 'binary', 'path' => '../HDDynamicPod', 'enabled' => true },
+            { 'name' => 'HDStaticPod', 'version' => '0.1.11', 'mode' => 'local', 'path' => '../HDStaticPod', 'enabled' => true }
+          ]
+        })
+        Config.instance.stubs(:installation_root).returns(Pathname(root))
+        podfile = Podfile.from_file(podfile_path)
+        Config.instance.stubs(:podfile).returns(podfile)
+
+        podfile.local_path_dependency?('HDStaticPod').should == true
+        podfile.local_path_dependency?('HDDynamicPod').should == false
+        podfile.effective_mode_for_pod('HDStaticPod').should == 'local'
+        podfile.effective_mode_for_pod('HDDynamicPod').should == 'binary'
+
+        status_cmd = Command::Bin::Status.new(CLAide::ARGV.new(%w[--json]))
+        status_cmd.validate!
+        payload = status_cmd.status_payload
+        dyn = payload['components'].find { |c| c['name'] == 'HDDynamicPod' }
+        stat = payload['components'].find { |c| c['name'] == 'HDStaticPod' }
+        dyn['declared_version'].should == '0.1.2'
+        dyn['mode'].should == 'binary'
+        stat['declared_version'].should == '0.1.11'
+        stat['mode'].should == 'local'
+      end
+    end
   end
 end
