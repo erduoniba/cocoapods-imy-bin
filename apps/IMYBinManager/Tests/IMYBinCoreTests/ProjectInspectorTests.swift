@@ -73,4 +73,17 @@ import Testing
     try PodspecInspector.updateVersion(in: podspecURL, to: "0.1.1")
     let updatedInfo = try PodspecInspector.inspect(podspecURL, includeGitStatus: false)
     #expect(updatedInfo.version == "0.1.1")
+
+    // PodspecInspector manages component's own s.dependency declarations
+    try PodspecInspector.upsertDependency(in: podspecURL, name: "HDStaticPod", versionRequirement: "~> 0.1.11")
+    let withDep = try PodspecInspector.inspect(podspecURL, includeGitStatus: false)
+    #expect(withDep.dependencies == [PodspecDependency(name: "HDStaticPod", versionRequirement: "~> 0.1.11")])
+
+    try PodspecInspector.upsertDependency(in: podspecURL, name: "HDStaticPod", versionRequirement: "0.1.12")
+    let updatedDep = try PodspecInspector.inspect(podspecURL, includeGitStatus: false)
+    #expect(updatedDep.dependencies == [PodspecDependency(name: "HDStaticPod", versionRequirement: "0.1.12")])
+
+    try PodspecInspector.removeDependency(in: podspecURL, name: "HDStaticPod")
+    let afterRemove = try PodspecInspector.inspect(podspecURL, includeGitStatus: false)
+    #expect(afterRemove.dependencies.isEmpty)
 }

@@ -128,10 +128,15 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
 
     public static func loadOrBootstrap(
         from appDirectoryURL: URL,
-        workspacePodspecs: [ComponentPodspecInfo] = []
+        workspacePodspecs: [ComponentPodspecInfo] = [],
+        excludingSelfComponent: String? = nil,
+        defaultEnabledNames: Set<String>? = nil
     ) -> ComponentConfigTable {
         let overrides = PodfileComponentInspector.readModeOverrides(from: appDirectoryURL)
         if var existing = try? read(from: appDirectoryURL) {
+            if let excludingSelfComponent {
+                existing.components.removeAll { $0.name == excludingSelfComponent }
+            }
             var seen = Set(existing.components.map(\.name))
             for idx in existing.components.indices {
                 let compName = existing.components[idx].name
@@ -139,16 +144,17 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
                     existing.components[idx].mode = overrideMode
                 }
             }
-            for spec in workspacePodspecs where !seen.contains(spec.name) {
+            for spec in workspacePodspecs where !seen.contains(spec.name) && spec.name != excludingSelfComponent {
                 seen.insert(spec.name)
                 let relPath = relativePath(from: appDirectoryURL, to: spec.repositoryURL)
+                let isEnabled = defaultEnabledNames.map { $0.contains(spec.name) } ?? true
                 existing.components.append(
                     ComponentConfigEntry(
                         name: spec.name,
                         version: spec.version,
                         mode: overrides[spec.name] ?? existing.defaultMode,
                         path: relPath,
-                        enabled: true
+                        enabled: isEnabled
                     )
                 )
             }
@@ -158,7 +164,7 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
 
         let podfileDeps = PodfileComponentInspector.inspectPodfileDeclarationsOnly(from: appDirectoryURL)
         var map: [String: ComponentConfigEntry] = [:]
-        for dep in podfileDeps {
+        for dep in podfileDeps where dep.name != excludingSelfComponent {
             map[dep.name] = ComponentConfigEntry(
                 name: dep.name,
                 version: dep.declaredVersion,
@@ -167,7 +173,7 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
                 enabled: true
             )
         }
-        for spec in workspacePodspecs {
+        for spec in workspacePodspecs where spec.name != excludingSelfComponent {
             let relPath = relativePath(from: appDirectoryURL, to: spec.repositoryURL)
             if var entry = map[spec.name] {
                 if entry.version == nil || entry.version?.isEmpty == true {
@@ -178,12 +184,13 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
                 }
                 map[spec.name] = entry
             } else {
+                let isEnabled = defaultEnabledNames.map { $0.contains(spec.name) } ?? true
                 map[spec.name] = ComponentConfigEntry(
                     name: spec.name,
                     version: spec.version,
                     mode: overrides[spec.name] ?? "binary",
                     path: relPath,
-                    enabled: true
+                    enabled: isEnabled
                 )
             }
         }

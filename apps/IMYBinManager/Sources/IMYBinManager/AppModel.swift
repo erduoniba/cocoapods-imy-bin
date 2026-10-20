@@ -7,7 +7,6 @@ final class AppModel: ObservableObject {
     enum Page: String, CaseIterable, Identifiable {
         case overview
         case dependencies
-        case build
         case server
         case logs
         case settings
@@ -15,11 +14,10 @@ final class AppModel: ObservableObject {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .overview: "工作台概览"
+            case .overview: "App 概览"
             case .dependencies: "App 配置表与安装"
-            case .build: "组件发布管理"
             case .server: "制品服务"
-            case .logs: "运行日志"
+            case .logs: "App 运行日志"
             case .settings: "设置"
             }
         }
@@ -27,7 +25,6 @@ final class AppModel: ObservableObject {
             switch self {
             case .overview: "rectangle.3.group"
             case .dependencies: "tablecells"
-            case .build: "paperplane.fill"
             case .server: "shippingbox"
             case .logs: "terminal"
             case .settings: "gearshape"
@@ -35,7 +32,35 @@ final class AppModel: ObservableObject {
         }
     }
 
+    enum ComponentPage: String, CaseIterable, Identifiable {
+        case dependencies
+        case publish
+        case logs
+
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .dependencies: "组件依赖管理"
+            case .publish: "组件版本与发布"
+            case .logs: "组件任务日志"
+            }
+        }
+        var systemImage: String {
+            switch self {
+            case .dependencies: "square.stack.3d.up"
+            case .publish: "paperplane.fill"
+            case .logs: "terminal"
+            }
+        }
+    }
+
+    private enum LogDestination {
+        case appWindow
+        case componentWindow
+    }
+
     @Published var selection: Page? = .overview
+    @Published var componentSelection: ComponentPage? = .dependencies
     @Published private(set) var project: ProjectSnapshot?
     @Published var selectedAppDirectory: URL? {
         didSet {
@@ -46,7 +71,7 @@ final class AppModel: ObservableObject {
     @Published var selectedPodspec: URL? {
         didSet {
             guard selectedPodspec != oldValue else { return }
-            syncEditingVersionFromSelectedPodspec()
+            reloadSelectedComponentState()
         }
     }
     @Published private(set) var componentPodspecs: [ComponentPodspecInfo] = []
@@ -55,6 +80,14 @@ final class AppModel: ObservableObject {
     @Published var autoCommitVersionBump = true
     @Published var autoInstallAfterSwitch = false
 
+    // Component's own dependencies (podspec s.dependency + Example/.imy-bin-config.json)
+    @Published var newPodspecDepName = ""
+    @Published var newPodspecDepVersion = ""
+    @Published var componentConfigTable: ComponentConfigTable?
+    @Published private(set) var hasSavedComponentConfigTable = false
+    @Published var autoInstallComponentExampleAfterSwitch = false
+
+    // Host App's dependency config table (.imy-bin-config.json)
     @Published var configTable: ComponentConfigTable?
     @Published private(set) var hasSavedConfigTable = false
     @Published private(set) var localComponents: [LocalComponentDependency] = []
@@ -99,6 +132,12 @@ final class AppModel: ObservableObject {
         refreshToolchain()
     }
 
+    var hostAppDirectories: [URL] {
+        guard let project else { return [] }
+        let nonExample = project.appDirectories.filter { $0.lastPathComponent.lowercased() != "example" }
+        return nonExample.isEmpty ? project.appDirectories : nonExample
+    }
+
     var binaryVersionCount: Int {
         binaryComponents.reduce(0) { $0 + $1.versions.count }
     }
@@ -130,8 +169,13 @@ final class AppModel: ObservableObject {
     }
 
     var configTableFileURL: URL? {
-        guard let appDir = selectedAppDirectory ?? project?.primaryAppDirectory else { return nil }
+        guard let appDir = selectedAppDirectory ?? hostAppDirectories.first else { return nil }
         return ComponentConfigTable.fileURL(in: appDir)
+    }
+
+    var componentExampleConfigFileURL: URL? {
+        guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return nil }
+        return ComponentConfigTable.fileURL(in: exampleDir)
     }
 
     func publishedVersions(for componentName: String) -> [String] {
@@ -166,17 +210,18 @@ final class AppModel: ObservableObject {
 
             if let currentPodspec = selectedPodspec,
                snapshot.podspecURLs.contains(where: { $0.standardizedFileURL == currentPodspec.standardizedFileURL }) {
-                syncEditingVersionFromSelectedPodspec()
+                reloadSelectedComponentState()
             } else {
                 selectedPodspec = snapshot.podspecURLs.first
-                syncEditingVersionFromSelectedPodspec()
+                reloadSelectedComponentState()
             }
 
+            let availableHostApps = hostAppDirectories
             if let currentApp = selectedAppDirectory,
-               snapshot.appDirectories.contains(where: { $0.standardizedFileURL == currentApp.standardizedFileURL }) {
+               availableHostApps.contains(where: { $0.standardizedFileURL == currentApp.standardizedFileURL }) {
                 reloadAppDirectoryState()
             } else {
-                selectedAppDirectory = snapshot.primaryAppDirectory
+                selectedAppDirectory = availableHostApps.first
                 reloadAppDirectoryState()
             }
 
@@ -194,7 +239,7 @@ final class AppModel: ObservableObject {
     }
 
     private func reloadAppDirectoryState() {
-        guard let appDir = selectedAppDirectory ?? project?.primaryAppDirectory else {
+        guard let appDir = selectedAppDirectory ?? hostAppDirectories.first else {
             configTable = nil
             hasSavedConfigTable = false
             localComponents = []
@@ -230,6 +275,31 @@ final class AppModel: ObservableObject {
             managedPolicyError = error.localizedDescription
         }
     }
+
+    private func reloadSelectedComponentState() {
+        guard let info = selectedComponentInfo else {
+            editingComponentVersion = ""
+            componentConfigTable = nil
+            hasSavedComponentConfigTable = false
+            return
+        }
+        editingComponentVersion = info.version
+        guard let exampleDir = info.exampleDirectoryURL else {
+            componentConfigTable = nil
+            hasSavedComponentConfigTable = false
+            return
+        }
+        let declaredDepNames = Set(info.dependencies.map { $0.name.split(separator: "/").first.map(String.init) ?? $0.name })
+        componentConfigTable = ComponentConfigTable.loadOrBootstrap(
+            from: exampleDir,
+            workspacePodspecs: componentPodspecs,
+            excludingSelfComponent: info.name,
+            defaultEnabledNames: declaredDepNames
+        )
+        hasSavedComponentConfigTable = ComponentConfigTable.exists(in: exampleDir)
+    }
+
+    // MARK: - Host App Config Table (.imy-bin-config.json)
 
     @discardableResult
     func saveConfigTable() -> Bool {
@@ -271,20 +341,179 @@ final class AppModel: ObservableObject {
         updateConfigEntryVersion(componentName, to: local.version)
     }
 
-    private func syncEditingVersionFromSelectedPodspec() {
-        if let info = selectedComponentInfo {
-            editingComponentVersion = info.version
-        } else {
-            editingComponentVersion = ""
-        }
-    }
-
-    func navigateToPublish(componentName: String) {
+    func focusComponent(_ componentName: String, tab: ComponentPage = .publish) {
         if let match = componentPodspecs.first(where: { $0.name == componentName }) {
             selectedPodspec = match.podspecURL
         }
-        selection = .build
+        componentSelection = tab
     }
+
+    // MARK: - Component's Own Dependencies (podspec s.dependency & Example/.imy-bin-config.json)
+
+    func addOrUpdateSelectedPodspecDependency(name: String? = nil, versionRequirement: String? = nil) {
+        guard let info = selectedComponentInfo else {
+            alertMessage = "请先选择一个组件"
+            return
+        }
+        let targetName = (name ?? newPodspecDepName).trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetVersion = (versionRequirement ?? newPodspecDepVersion).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !targetName.isEmpty else {
+            alertMessage = "请输入或选择依赖的组件名称"
+            return
+        }
+        guard targetName != info.name else {
+            alertMessage = "组件不能依赖自身（\(info.name)）"
+            return
+        }
+        do {
+            try PodspecInspector.upsertDependency(
+                in: info.podspecURL,
+                name: targetName,
+                versionRequirement: targetVersion.isEmpty ? nil : targetVersion
+            )
+            newPodspecDepName = ""
+            newPodspecDepVersion = ""
+            if var table = componentConfigTable,
+               let idx = table.components.firstIndex(where: { $0.name == targetName }) {
+                table.components[idx].enabled = true
+                if !targetVersion.isEmpty, PodspecInspector.isValidVersion(targetVersion) {
+                    table.components[idx].version = targetVersion
+                }
+                componentConfigTable = table
+                _ = saveComponentExampleConfigTable()
+            }
+            refreshProject()
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func removeSelectedPodspecDependency(_ depName: String) {
+        guard let info = selectedComponentInfo else { return }
+        do {
+            try PodspecInspector.removeDependency(in: info.podspecURL, name: depName)
+            refreshProject()
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func saveComponentExampleConfigTable() -> Bool {
+        guard let info = selectedComponentInfo,
+              let exampleDir = info.exampleDirectoryURL else {
+            alertMessage = "当前组件未包含 Example 工程目录"
+            return false
+        }
+        let declaredDepNames = Set(info.dependencies.map { $0.name.split(separator: "/").first.map(String.init) ?? $0.name })
+        let table = componentConfigTable ?? ComponentConfigTable.loadOrBootstrap(
+            from: exampleDir,
+            workspacePodspecs: componentPodspecs,
+            excludingSelfComponent: info.name,
+            defaultEnabledNames: declaredDepNames
+        )
+        do {
+            try PodspecInspector.ensureExamplePodfileUsesConfigTable(
+                in: exampleDir,
+                selfPodName: info.name,
+                deploymentTarget: info.deploymentTarget ?? "15.0"
+            )
+            try table.write(to: exampleDir)
+            reloadSelectedComponentState()
+            return true
+        } catch {
+            alertMessage = "写入组件 Example 配置表失败：\(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func syncPodspecDependenciesToComponentExampleConfig() {
+        guard let info = selectedComponentInfo else { return }
+        let declared = Dictionary(uniqueKeysWithValues: info.dependencies.map {
+            (String($0.name.split(separator: "/").first ?? Substring($0.name)), $0.versionRequirement)
+        })
+        guard var table = componentConfigTable else { return }
+        for idx in table.components.indices {
+            let name = table.components[idx].name
+            if let reqOpt = declared[name] {
+                table.components[idx].enabled = true
+                if let req = reqOpt, PodspecInspector.isValidVersion(req) {
+                    table.components[idx].version = req
+                }
+            }
+        }
+        componentConfigTable = table
+        _ = saveComponentExampleConfigTable()
+    }
+
+    func updateComponentExampleEntryVersion(_ depName: String, to version: String) {
+        guard var table = componentConfigTable,
+              let idx = table.components.firstIndex(where: { $0.name == depName }) else { return }
+        table.components[idx].version = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        componentConfigTable = table
+        _ = saveComponentExampleConfigTable()
+    }
+
+    func updateComponentExampleEntryEnabled(_ depName: String, enabled: Bool) {
+        guard var table = componentConfigTable,
+              let idx = table.components.firstIndex(where: { $0.name == depName }) else { return }
+        table.components[idx].enabled = enabled
+        componentConfigTable = table
+        _ = saveComponentExampleConfigTable()
+    }
+
+    func switchComponentExampleDepMode(_ depName: String, to mode: String) {
+        guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return }
+        if var table = componentConfigTable,
+           let idx = table.components.firstIndex(where: { $0.name == depName }) {
+            table.components[idx].mode = mode
+            componentConfigTable = table
+            guard saveComponentExampleConfigTable() else { return }
+        }
+        var commands = [BinCommandBuilder.switchMode(component: depName, mode: mode)]
+        if autoInstallComponentExampleAfterSwitch {
+            commands.append(BinCommandBuilder.install())
+        }
+        run(commands, in: exampleDir, logDestination: .componentWindow)
+    }
+
+    func switchAllComponentExampleDeps(to mode: String) {
+        guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return }
+        if var table = componentConfigTable {
+            for idx in table.components.indices {
+                if mode == "local" && !table.components[idx].supportsLocal { continue }
+                table.components[idx].mode = mode
+            }
+            table.defaultMode = mode
+            componentConfigTable = table
+            guard saveComponentExampleConfigTable() else { return }
+        }
+        var commands = [BinCommandBuilder.switchAll(mode: mode)]
+        if autoInstallComponentExampleAfterSwitch {
+            commands.append(BinCommandBuilder.install())
+        }
+        run(commands, in: exampleDir, logDestination: .componentWindow)
+    }
+
+    func installComponentExampleDependencies() {
+        guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else {
+            alertMessage = "当前组件没有 Example 工程目录"
+            return
+        }
+        guard saveComponentExampleConfigTable() else { return }
+        run([BinCommandBuilder.install()], in: exampleDir, logDestination: .componentWindow)
+    }
+
+    func updateComponentExampleDependencies() {
+        guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else {
+            alertMessage = "当前组件没有 Example 工程目录"
+            return
+        }
+        guard saveComponentExampleConfigTable() else { return }
+        run([BinCommandBuilder.update()], in: exampleDir, logDestination: .componentWindow)
+    }
+
+    // MARK: - Component Versioning & Publishing
 
     func bumpEditingVersion(_ kind: VersionBumpKind) {
         let base = editingComponentVersion.isEmpty ? (selectedComponentInfo?.version ?? "0.1.0") : editingComponentVersion
@@ -303,13 +532,15 @@ final class AppModel: ObservableObject {
         let targetVersion = editingComponentVersion.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             try PodspecInspector.updateVersion(in: info.podspecURL, to: targetVersion)
-            if syncVersionToAppPodfile, let appDir = selectedAppDirectory ?? project?.primaryAppDirectory {
-                _ = try? ComponentConfigTable.updateComponentVersion(
-                    in: appDir,
-                    workspacePodspecs: componentPodspecs,
-                    component: info.name,
-                    to: targetVersion
-                )
+            if syncVersionToAppPodfile {
+                for appDir in hostAppDirectories {
+                    _ = try? ComponentConfigTable.updateComponentVersion(
+                        in: appDir,
+                        workspacePodspecs: componentPodspecs,
+                        component: info.name,
+                        to: targetVersion
+                    )
+                }
             }
             refreshProject()
             if autoCommitVersionBump {
@@ -317,7 +548,7 @@ final class AppModel: ObservableObject {
                     podspecFileName: info.podspecURL.lastPathComponent,
                     version: targetVersion
                 )
-                run([commitCommand], in: info.repositoryURL)
+                run([commitCommand], in: info.repositoryURL, logDestination: .componentWindow)
             }
         } catch {
             alertMessage = error.localizedDescription
@@ -329,22 +560,21 @@ final class AppModel: ObservableObject {
             alertMessage = "请先选择一个组件"
             return
         }
-        guard let appDir = selectedAppDirectory ?? project?.primaryAppDirectory else {
+        let apps = hostAppDirectories
+        guard !apps.isEmpty else {
             alertMessage = "未找到包含 Podfile 的宿主 App 目录"
             return
         }
         do {
-            let updated = try ComponentConfigTable.updateComponentVersion(
-                in: appDir,
-                workspacePodspecs: componentPodspecs,
-                component: info.name,
-                to: info.version
-            )
-            if updated {
-                refreshProject()
-            } else {
-                alertMessage = "在配置表中未找到组件 \(info.name)"
+            for appDir in apps {
+                _ = try ComponentConfigTable.updateComponentVersion(
+                    in: appDir,
+                    workspacePodspecs: componentPodspecs,
+                    component: info.name,
+                    to: info.version
+                )
             }
+            refreshProject()
         } catch {
             alertMessage = error.localizedDescription
         }
@@ -391,19 +621,19 @@ final class AppModel: ObservableObject {
     func runInstall() {
         guard let appDir = requireAppDirectory() else { return }
         _ = saveConfigTable()
-        run([BinCommandBuilder.install()], in: appDir)
+        run([BinCommandBuilder.install()], in: appDir, logDestination: .appWindow)
     }
 
     func runUpdate() {
         guard let appDir = requireAppDirectory() else { return }
         _ = saveConfigTable()
-        run([BinCommandBuilder.update()], in: appDir)
+        run([BinCommandBuilder.update()], in: appDir, logDestination: .appWindow)
     }
 
     func runStatus() {
         guard let appDir = requireAppDirectory() else { return }
         _ = saveConfigTable()
-        run([BinCommandBuilder.status()], in: appDir)
+        run([BinCommandBuilder.status()], in: appDir, logDestination: .appWindow)
     }
 
     func runPolicySync() {
@@ -427,7 +657,7 @@ final class AppModel: ObservableObject {
             project: projectKey,
             revision: managedPolicyRevision.trimmingCharacters(in: .whitespacesAndNewlines),
             server: binaryServerAddress
-        )], in: appDir)
+        )], in: appDir, logDestination: .appWindow)
     }
 
     func switchMode(_ dependency: ManagedDependency, to mode: String) {
@@ -446,7 +676,7 @@ final class AppModel: ObservableObject {
         if autoInstallAfterSwitch {
             commands.append(BinCommandBuilder.install())
         }
-        run(commands, in: appDir)
+        run(commands, in: appDir, logDestination: .appWindow)
     }
 
     func switchAllComponents(to mode: String) {
@@ -464,7 +694,7 @@ final class AppModel: ObservableObject {
         if autoInstallAfterSwitch {
             commands.append(BinCommandBuilder.install())
         }
-        run(commands, in: appDir)
+        run(commands, in: appDir, logDestination: .appWindow)
     }
 
     func resetComponentModes() {
@@ -481,7 +711,7 @@ final class AppModel: ObservableObject {
         if autoInstallAfterSwitch {
             commands.append(BinCommandBuilder.install())
         }
-        run(commands, in: appDir)
+        run(commands, in: appDir, logDestination: .appWindow)
     }
 
     func runArchive() {
@@ -496,7 +726,7 @@ final class AppModel: ObservableObject {
             configuration: configuration,
             buildMissingDependencies: buildMissingDependencies,
             keepIntermediates: keepIntermediates
-        )], in: workingDir)
+        )], in: workingDir, logDestination: .componentWindow)
     }
 
     func runPublishDryRun() {
@@ -527,7 +757,12 @@ final class AppModel: ObservableObject {
             skipCodeSpec: skipCodeSpec,
             dryRun: dryRun
         )
-        run([command], in: workingDir, refreshBinaryServerOnCompletion: !dryRun)
+        run(
+            [command],
+            in: workingDir,
+            logDestination: .componentWindow,
+            refreshBinaryServerOnCompletion: !dryRun
+        )
     }
 
     func cancelTask() {
@@ -553,16 +788,17 @@ final class AppModel: ObservableObject {
     }
 
     private func requireAppDirectory() -> URL? {
-        if let dir = selectedAppDirectory ?? project?.primaryAppDirectory {
+        if let dir = selectedAppDirectory ?? hostAppDirectories.first {
             return dir
         }
-        alertMessage = "当前工程未找到包含 Podfile 的 App 目录"
+        alertMessage = "当前工程未找到包含 Podfile 的宿主 App 目录"
         return nil
     }
 
     private func run(
         _ commands: [CommandSpec],
         in workingDirectory: URL,
+        logDestination: LogDestination,
         refreshBinaryServerOnCompletion: Bool = false
     ) {
         guard project != nil else {
@@ -592,7 +828,12 @@ final class AppModel: ObservableObject {
             return
         }
         selectedTaskID = taskID
-        selection = .logs
+        switch logDestination {
+        case .appWindow:
+            selection = .logs
+        case .componentWindow:
+            componentSelection = .logs
+        }
 
         executionTask = Task {
             var finalExitCode: Int32 = 0
@@ -646,7 +887,7 @@ final class AppModel: ObservableObject {
         let fm = FileManager.default
         var candidates: [URL] = []
         var current = workspaceURL.standardizedFileURL
-        for _ in 0..<4 {
+        for _ in 0..<5 {
             candidates.append(current)
             let parent = current.deletingLastPathComponent()
             if parent.path == current.path { break }

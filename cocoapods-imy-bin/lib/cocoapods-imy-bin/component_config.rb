@@ -77,26 +77,35 @@ module CBin
 
     def self.bootstrap_from_workspace(project_root, default_mode: 'binary')
       root_path = Pathname.new(File.expand_path(project_root.to_s))
-      parent_path = root_path.dirname
+      is_example = root_path.basename.to_s.casecmp('example').zero?
+      self_spec_file = is_example ? Dir.glob(File.join(root_path.dirname.to_s, '*.podspec')).sort.first : nil
+      self_spec = self_spec_file ? Pod::Specification.from_file(self_spec_file) : nil
+      self_pod_name = self_spec&.root&.name
+      declared_dep_names = self_spec ? self_spec.dependencies.map(&:root_name) : nil
+
+      workspace_dir = is_example ? root_path.dirname.dirname : root_path.dirname
       components = []
 
-      if parent_path.directory?
-        parent_path.children.sort.each do |child|
+      if workspace_dir.directory?
+        workspace_dir.children.sort.each do |child|
           next unless child.directory?
-          next if child == root_path
+          next if child == root_path || (is_example && child == root_path.dirname)
           next if EXCLUDED_DIRS.include?(child.basename.to_s) || child.basename.to_s.start_with?('.')
 
           podspec_file = Dir.glob(File.join(child.to_s, '*.podspec')).sort.first
           next unless podspec_file
 
           spec = Pod::Specification.from_file(podspec_file)
+          next if self_pod_name && spec.root.name == self_pod_name
+
           rel_path = child.relative_path_from(root_path).to_s
+          enabled = declared_dep_names ? declared_dep_names.include?(spec.root.name) : true
           components << {
             'name' => spec.root.name,
             'version' => spec.version.to_s,
             'mode' => default_mode,
             'path' => rel_path,
-            'enabled' => true
+            'enabled' => enabled
           }
         rescue StandardError
           next
@@ -105,7 +114,7 @@ module CBin
 
       {
         'version' => 1,
-        'project' => root_path.basename.to_s,
+        'project' => is_example && self_pod_name ? "#{self_pod_name}_Example" : root_path.basename.to_s,
         'environment' => 'dev',
         'defaultMode' => default_mode,
         'updatedAt' => Time.now.utc.iso8601,
