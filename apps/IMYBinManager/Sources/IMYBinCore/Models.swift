@@ -26,22 +26,33 @@ public enum BuildConfiguration: String, CaseIterable, Identifiable, Sendable {
 public struct ProjectSnapshot: Equatable, Sendable {
     public let rootURL: URL
     public let podspecURLs: [URL]
+    public let appDirectories: [URL]
     public let hasPodfile: Bool
     public let hasLockfile: Bool
     public let hasArchiveConfiguration: Bool
+
+    public var primaryAppDirectory: URL? {
+        appDirectories.first ?? (hasPodfile ? rootURL : nil)
+    }
 
     public init(
         rootURL: URL,
         podspecURLs: [URL],
         hasPodfile: Bool,
         hasLockfile: Bool,
-        hasArchiveConfiguration: Bool
+        hasArchiveConfiguration: Bool,
+        appDirectories: [URL]? = nil
     ) {
         self.rootURL = rootURL
         self.podspecURLs = podspecURLs
         self.hasPodfile = hasPodfile
         self.hasLockfile = hasLockfile
         self.hasArchiveConfiguration = hasArchiveConfiguration
+        if let appDirectories {
+            self.appDirectories = appDirectories
+        } else {
+            self.appDirectories = hasPodfile ? [rootURL] : []
+        }
     }
 }
 

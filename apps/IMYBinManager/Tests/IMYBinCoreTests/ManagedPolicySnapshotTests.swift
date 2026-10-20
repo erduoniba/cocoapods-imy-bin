@@ -47,4 +47,13 @@ import Testing
     #expect(components[1].declaredVersion == "0.1.11")
     #expect(components[1].effectiveMode == "local")
     #expect(components[1].overrideMode == "local")
+
+    let updated = try PodfileComponentInspector.updateDependencyVersion(
+        in: directory,
+        component: "HDDynamicPod",
+        to: "0.1.2"
+    )
+    #expect(updated)
+    let reloaded = PodfileComponentInspector.inspect(from: directory)
+    #expect(reloaded[0].declaredVersion == "0.1.2")
 }

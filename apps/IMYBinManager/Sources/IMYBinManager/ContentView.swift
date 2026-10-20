@@ -19,19 +19,19 @@ struct ContentView: View {
                 switch model.selection ?? .overview {
                 case .overview:
                     OverviewView()
-                case .server:
-                    BinaryServerView()
                 case .dependencies:
                     ManagedDependenciesView()
                 case .build:
-                    TasksView()
+                    ComponentPublishView()
+                case .server:
+                    BinaryServerView()
                 case .logs:
                     LogsView()
                 case .settings:
                     SettingsView()
                 }
             }
-            .navigationTitle(model.selection?.title ?? "概览")
+            .navigationTitle(model.selection?.title ?? "工作台概览")
         }
         .alert("提示", isPresented: Binding(
             get: { model.alertMessage != nil },
@@ -54,11 +54,18 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                HStack(spacing: 8) {
+                    Label("\(project.appDirectories.count) 个 App", systemImage: "app.badge")
+                    Spacer()
+                    Label("\(model.componentPodspecs.count) 个组件", systemImage: "shippingbox")
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             } else {
-                Text("尚未选择工程")
+                Text("尚未选择工作区或工程")
                     .foregroundStyle(.secondary)
             }
-            Button("选择工程…") { model.selectProject() }
+            Button("选择工作区 / 工程…") { model.selectProject() }
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity)
         }
@@ -76,7 +83,7 @@ private struct BinaryServerView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("二进制制品服务")
                         .font(.largeTitle.bold())
-                    Text("连接仓库内的 binary-server，浏览已上传组件及版本。")
+                    Text("连接仓库内的 binary-server，浏览已发布的 XCFramework 组件及版本。")
                         .foregroundStyle(.secondary)
                 }
 
@@ -112,9 +119,9 @@ private struct BinaryServerView: View {
                     .padding(.top, 6)
                 }
 
-                GroupBox("组件版本") {
+                GroupBox("已发布组件版本") {
                     if model.binaryComponents.isEmpty {
-                        EmptyHint(text: model.binaryServerCheckedAt == nil ? "连接服务后显示组件。" : "服务中暂无组件。")
+                        EmptyHint(text: model.binaryServerCheckedAt == nil ? "连接服务后显示组件。" : "服务中暂无已发布组件。")
                     } else {
                         LazyVStack(spacing: 0) {
                             ForEach(model.binaryComponents) { component in
@@ -122,13 +129,29 @@ private struct BinaryServerView: View {
                                     Image(systemName: "shippingbox.fill")
                                         .foregroundStyle(.tint)
                                     VStack(alignment: .leading, spacing: 5) {
-                                        Text(component.name).font(.headline)
+                                        HStack(spacing: 8) {
+                                            Text(component.name).font(.headline)
+                                            if let local = model.localPodspecInfo(named: component.name) {
+                                                Text("本地 podspec: \(local.version)")
+                                                    .font(.caption2.monospaced())
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(.quaternary)
+                                                    .clipShape(Capsule())
+                                            }
+                                        }
                                         Text(component.versions.joined(separator: "  ·  "))
                                             .font(.system(.caption, design: .monospaced))
                                             .foregroundStyle(.secondary)
                                             .textSelection(.enabled)
                                     }
                                     Spacer()
+                                    if model.localPodspecInfo(named: component.name) != nil {
+                                        Button("管理发布") {
+                                            model.navigateToPublish(componentName: component.name)
+                                        }
+                                        .controlSize(.small)
+                                    }
                                     Text("\(component.versions.count) 个版本")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -161,16 +184,46 @@ private struct ManagedDependenciesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("工程依赖管理")
+                    Text("App 依赖与安装管理")
                         .font(.largeTitle.bold())
-                    Text("管理 Podfile 中的组件模式（local / source / binary），或同步团队平台策略快照。")
+                    Text("管理宿主 App 的 Podfile 组件依赖模式（local / source / binary），并一键执行 pod bin install / update。")
                         .foregroundStyle(.secondary)
+                }
+
+                GroupBox("目标 App 工程与依赖安装") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let project = model.project, !project.appDirectories.isEmpty {
+                            HStack {
+                                Picker("宿主 App 目录", selection: $model.selectedAppDirectory) {
+                                    ForEach(project.appDirectories, id: \.self) { dir in
+                                        Text("\(dir.lastPathComponent) (\(dir.path))").tag(Optional(dir))
+                                    }
+                                }
+                                Button("刷新") { model.refreshProject() }
+                            }
+                        } else {
+                            EmptyHint(text: "当前工作区未检测到包含 Podfile 的 App 目录。")
+                        }
+
+                        Divider()
+
+                        HStack(spacing: 12) {
+                            Button("安装依赖 (pod bin install)") { model.runInstall() }
+                                .buttonStyle(.borderedProminent)
+                            Button("更新依赖 (pod bin update)") { model.runUpdate() }
+                            Button("查询依赖状态 (pod bin status)") { model.runStatus() }
+                            Spacer()
+                            Toggle("切换模式后自动执行 pod bin install", isOn: $model.autoInstallAfterSwitch)
+                                .toggleStyle(.switch)
+                        }
+                    }
+                    .padding(.top, 6)
                 }
 
                 GroupBox("Podfile 组件依赖（.imy-bin-modes.yml）") {
                     VStack(alignment: .leading, spacing: 12) {
                         if model.localComponents.isEmpty {
-                            EmptyHint(text: "当前工程的 Podfile 中未检测到可切换的组件声明。")
+                            EmptyHint(text: "当前 App 的 Podfile 中未检测到可切换的组件声明。")
                         } else {
                             HStack(spacing: 10) {
                                 Text("全局切换：").font(.subheadline.bold())
@@ -178,16 +231,26 @@ private struct ManagedDependenciesView: View {
                                 Button("全部源码 (source)") { model.switchAllComponents(to: "source") }
                                 Button("全部二进制 (binary)") { model.switchAllComponents(to: "binary") }
                                 Spacer()
-                                Button("重置覆盖") { model.resetComponentModes() }
+                                Button("重置本地覆盖 (--reset)") { model.resetComponentModes() }
                             }
                             Divider()
                             ForEach(model.localComponents) { item in
-                                HStack {
+                                HStack(alignment: .center, spacing: 12) {
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text(item.name).font(.headline)
+                                        HStack(spacing: 8) {
+                                            Text(item.name).font(.headline)
+                                            ModeBadge(mode: item.effectiveMode, isOverride: item.overrideMode != nil)
+                                            if let declared = item.declaredVersion,
+                                               model.binaryServerCheckedAt != nil {
+                                                let available = model.isVersionPublished(componentName: item.name, version: declared)
+                                                Text(available ? "二进制已就绪" : "二进制未发布")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(available ? .green : .orange)
+                                            }
+                                        }
                                         Text(
-                                            "\(item.declaredVersion ?? "未固定版本") · 当前模式：\(item.effectiveMode)"
-                                            + (item.overrideMode != nil ? "（本地覆盖）" : "")
+                                            "Podfile 版本：\(item.declaredVersion ?? "未固定")"
+                                            + (model.localPodspecInfo(named: item.name).map { " · 本地 podspec：\($0.version)" } ?? "")
                                             + (item.localPath.map { " · path: \($0)" } ?? "")
                                         )
                                         .font(.caption.monospaced())
@@ -200,7 +263,14 @@ private struct ManagedDependenciesView: View {
                                         .disabled(item.effectiveMode == "source")
                                     Button("二进制") { model.switchLocalComponent(item.name, to: "binary") }
                                         .disabled(item.effectiveMode == "binary")
+                                    if model.localPodspecInfo(named: item.name) != nil {
+                                        Button("去发布…") {
+                                            model.navigateToPublish(componentName: item.name)
+                                        }
+                                        .controlSize(.small)
+                                    }
                                 }
+                                .padding(.vertical, 4)
                                 if item.id != model.localComponents.last?.id {
                                     Divider()
                                 }
@@ -218,7 +288,6 @@ private struct ManagedDependenciesView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Button("同步策略") { model.runPolicySync() }
-                            .buttonStyle(.borderedProminent)
                         if let error = model.managedPolicyError {
                             Label(error, systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
@@ -253,13 +322,250 @@ private struct ManagedDependenciesView: View {
                             }
                         }
                     }
-                } else {
-                    EmptyHint(text: "当前工程没有策略快照。先配置平台服务和工程标识，然后同步。")
                 }
             }
             .padding(24)
         }
         .disabled(model.project == nil || model.isRunning)
+    }
+}
+
+private struct ComponentPublishView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var isShowingPublishConfirmation = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("组件发布管理")
+                        .font(.largeTitle.bold())
+                    Text("管理组件的 podspec 版本号、Git 标签状态、XCFramework 二进制归档与双轨 Spec 发布。")
+                        .foregroundStyle(.secondary)
+                }
+
+                GroupBox("选择要管理的组件（.podspec）") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if model.componentPodspecs.isEmpty {
+                            EmptyHint(text: "当前工作区没有找到可发布的组件 podspec。")
+                        } else {
+                            HStack {
+                                Picker("目标组件", selection: $model.selectedPodspec) {
+                                    ForEach(model.componentPodspecs) { spec in
+                                        Text("\(spec.name) (\(spec.version)) — \(spec.podspecURL.lastPathComponent)")
+                                            .tag(Optional(spec.podspecURL))
+                                    }
+                                }
+                                Button("刷新状态") {
+                                    model.refreshProject()
+                                    model.refreshBinaryServer()
+                                }
+                            }
+                            Divider()
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(model.componentPodspecs) { spec in
+                                    let isSelected = model.selectedComponentInfo?.id == spec.id
+                                    HStack(spacing: 12) {
+                                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            HStack(spacing: 8) {
+                                                Text(spec.name).font(.headline)
+                                                Text("v\(spec.version)")
+                                                    .font(.caption.monospaced())
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(.quaternary)
+                                                    .clipShape(Capsule())
+                                                Text(spec.staticFramework ? "静态 XCFramework" : "动态 XCFramework")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            Text(spec.podspecURL.path)
+                                                .font(.caption2.monospaced())
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Label(
+                                            spec.isGitClean ? "Git 干净" : "有未提交改动",
+                                            systemImage: spec.isGitClean ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"
+                                        )
+                                        .font(.caption)
+                                        .foregroundStyle(spec.isGitClean ? .green : .orange)
+
+                                        if model.isVersionPublished(componentName: spec.name, version: spec.version) {
+                                            Label("已发布二进制", systemImage: "shippingbox.fill")
+                                                .font(.caption)
+                                                .foregroundStyle(.green)
+                                        }
+                                    }
+                                    .padding(8)
+                                    .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        model.selectedPodspec = spec.podspecURL
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+
+                if let info = model.selectedComponentInfo {
+                    GroupBox("版本管理与 Git 状态 — \(info.name)") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 12) {
+                                Text("当前版本：")
+                                    .font(.subheadline.bold())
+                                Text(info.version)
+                                    .font(.system(.body, design: .monospaced).bold())
+                                Divider().frame(height: 18)
+                                Text("目标版本：")
+                                    .font(.subheadline.bold())
+                                TextField("0.1.2", text: $model.editingComponentVersion)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 120)
+                                ForEach(VersionBumpKind.allCases) { kind in
+                                    Button(kind.title) {
+                                        model.bumpEditingVersion(kind)
+                                    }
+                                    .controlSize(.small)
+                                }
+                            }
+
+                            HStack(spacing: 20) {
+                                Toggle("同时更新宿主 App Podfile 中的组件版本", isOn: $model.syncVersionToAppPodfile)
+                                Toggle("保存版本后自动提交到组件 Git 仓库", isOn: $model.autoCommitVersionBump)
+                            }
+                            .font(.caption)
+
+                            HStack(spacing: 12) {
+                                Button("写入新版本号") {
+                                    model.applyComponentVersionUpdate()
+                                }
+                                .disabled(
+                                    model.editingComponentVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    || model.editingComponentVersion.trimmingCharacters(in: .whitespacesAndNewlines) == info.version
+                                )
+                                Button("同步当前版本 (\(info.version)) 到 App Podfile") {
+                                    model.syncSelectedComponentVersionToPodfile()
+                                }
+                            }
+
+                            Divider()
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                StatusRow(
+                                    title: "Git 分支与工作区",
+                                    value: "\(info.gitBranch ?? "未知分支") · " + (info.isGitClean ? "工作区干净（可发布）" : "存在 \(info.dirtyFilesSummary.count) 个未提交文件"),
+                                    success: info.isGitClean
+                                )
+                                if !info.isGitClean {
+                                    Text("未提交文件：" + info.dirtyFilesSummary.joined(separator: "，"))
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.orange)
+                                }
+                                StatusRow(
+                                    title: "当前版本 Git Tag (\(info.version))",
+                                    value: info.hasCurrentVersionTag ? "已存在 Tag（将复用现有 Tag）" : "尚未打 Tag（发布时将自动创建）",
+                                    success: true
+                                )
+                                let published = model.publishedVersions(for: info.name)
+                                StatusRow(
+                                    title: "binary-server 制品状态",
+                                    value: published.isEmpty
+                                        ? (model.binaryServerCheckedAt == nil ? "未检测（点击右上角刷新）" : "尚未上传任何版本")
+                                        : "已发布版本：\(published.joined(separator: ", "))",
+                                    success: published.contains(info.version)
+                                )
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
+
+                    GroupBox("XCFramework 构建与发布参数") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 24) {
+                                Picker("发布环境", selection: $model.environment) {
+                                    ForEach(BinEnvironment.allCases) { env in
+                                        Text(env.title).tag(env)
+                                    }
+                                }
+                                .frame(maxWidth: 260)
+
+                                Picker("Configuration", selection: $model.configuration) {
+                                    ForEach(BuildConfiguration.allCases) { cfg in
+                                        Text(cfg.rawValue).tag(cfg)
+                                    }
+                                }
+                                .frame(maxWidth: 220)
+                            }
+
+                            LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], spacing: 10) {
+                                Toggle("构建时使用源码依赖（--code-dependencies）", isOn: $model.codeDependencies)
+                                Toggle("保留构建中间产物（--no-clean）", isOn: $model.keepIntermediates)
+                                Toggle("跳过 Git Tag 创建/校验（--skip-tag）", isOn: $model.skipTag)
+                                Toggle("跳过源码 Spec 推送（--skip-code-spec）", isOn: $model.skipCodeSpec)
+                                Toggle("归档时构建缺失依赖（--all-make）", isOn: $model.buildMissingDependencies)
+                            }
+
+                            Divider()
+
+                            HStack(spacing: 12) {
+                                Button("仅构建二进制 (pod bin archive)") {
+                                    model.runArchive()
+                                }
+                                Button("发布预检 (pod bin publish --dry-run)") {
+                                    model.runPublishDryRun()
+                                }
+                                Spacer()
+                                Button("正式发布组件 (pod bin publish)") {
+                                    isShowingPublishConfirmation = true
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            Text("正式发布将按序执行：Git 工作区与 Tag 检查 → 推送源码 Spec → 构建真机+模拟器 XCFramework → 上传 ZIP 到 binary-server → 生成并推送二进制 Spec（失败自动回滚）。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 6)
+                    }
+                    .confirmationDialog(
+                        "确认发布 \(info.name) (\(info.version))？",
+                        isPresented: $isShowingPublishConfirmation,
+                        titleVisibility: .visible
+                    ) {
+                        Button("确认发布 \(info.name) v\(info.version)") {
+                            model.runOfficialPublish()
+                        }
+                        Button("先执行预检 (--dry-run)") {
+                            model.runPublishDryRun()
+                        }
+                        Button("取消", role: .cancel) {}
+                    } message: {
+                        Text("组件：\(info.name)\n版本：\(info.version)\n环境：\(model.environment.title) (\(model.configuration.rawValue))\n制品服务：\(model.binaryServerAddress)")
+                    }
+                }
+            }
+            .padding(24)
+        }
+        .disabled(model.project == nil || model.isRunning)
+        .overlay {
+            if model.project == nil {
+                VStack(spacing: 12) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.secondary)
+                    Text("请选择工作区或组件目录")
+                        .font(.title2.bold())
+                    Text("从左下角选择包含组件 podspec 或宿主 App 的工作区目录。")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(24)
+            }
+        }
     }
 }
 
@@ -270,17 +576,40 @@ private struct OverviewView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
-                GroupBox("工程检查") {
+                GroupBox("工作区概览") {
                     if let project = model.project {
-                        VStack(spacing: 10) {
-                            StatusRow(title: "Podfile", value: project.hasPodfile ? "已找到" : "未找到", success: project.hasPodfile)
-                            StatusRow(title: "Podfile.lock", value: project.hasLockfile ? "已找到" : "未找到", success: project.hasLockfile)
-                            StatusRow(title: "BinArchive.json", value: project.hasArchiveConfiguration ? "已找到" : "可选", success: true)
-                            StatusRow(title: "podspec", value: "\(project.podspecURLs.count) 个", success: !project.podspecURLs.isEmpty)
+                        VStack(alignment: .leading, spacing: 10) {
+                            StatusRow(
+                                title: "宿主 App (Podfile)",
+                                value: project.appDirectories.isEmpty
+                                    ? "未找到"
+                                    : project.appDirectories.map(\.lastPathComponent).joined(separator: ", "),
+                                success: !project.appDirectories.isEmpty
+                            )
+                            StatusRow(
+                                title: "Podfile.lock",
+                                value: project.hasLockfile ? "已生成" : "未生成",
+                                success: project.hasLockfile
+                            )
+                            StatusRow(
+                                title: "可发布组件 (podspec)",
+                                value: model.componentPodspecs.isEmpty
+                                    ? "未找到"
+                                    : model.componentPodspecs.map { "\($0.name) (\($0.version))" }.joined(separator: " · "),
+                                success: !model.componentPodspecs.isEmpty
+                            )
+                            HStack(spacing: 12) {
+                                Button("管理 App 依赖与安装") { model.selection = .dependencies }
+                                    .disabled(project.appDirectories.isEmpty)
+                                Button("管理组件发布") { model.selection = .build }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(model.componentPodspecs.isEmpty)
+                            }
+                            .padding(.top, 4)
                         }
                         .padding(.top, 6)
                     } else {
-                        EmptyHint(text: "选择一个 CocoaPods 工程后开始扫描。")
+                        EmptyHint(text: "选择工作区根目录（如 ImyBin）、App 目录或组件目录后开始扫描。")
                     }
                 }
                 GroupBox("本机工具链") {
@@ -345,79 +674,10 @@ private struct OverviewView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("CocoaPods 二进制工作台")
+            Text("CocoaPods 组件化与二进制工作台")
                 .font(.largeTitle.bold())
-            Text("保留 Ruby 插件作为执行引擎，由桌面端提供环境诊断、任务编排和日志。")
+            Text("一站式管理 App 依赖三态切换安装（local / source / binary）与组件 XCFramework 发布。")
                 .foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct TasksView: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        Form {
-            Section("组件") {
-                if let project = model.project, !project.podspecURLs.isEmpty {
-                    Picker("podspec", selection: $model.selectedPodspec) {
-                        ForEach(project.podspecURLs, id: \.self) { url in
-                            Text(url.lastPathComponent).tag(Optional(url))
-                        }
-                    }
-                } else {
-                    Text("当前工程没有找到 podspec")
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("构建选项") {
-                Picker("环境", selection: $model.environment) {
-                    ForEach(BinEnvironment.allCases) { environment in
-                        Text(environment.title).tag(environment)
-                    }
-                }
-                Picker("Configuration", selection: $model.configuration) {
-                    ForEach(BuildConfiguration.allCases) { configuration in
-                        Text(configuration.rawValue).tag(configuration)
-                    }
-                }
-                Toggle("构建缺失二进制的依赖（--all-make）", isOn: $model.buildMissingDependencies)
-                Toggle("构建时使用源码依赖（--code-dependencies）", isOn: $model.codeDependencies)
-                Toggle("保留中间产物（--no-clean）", isOn: $model.keepIntermediates)
-                Toggle("发布预检模式，只构建不上传（--dry-run）", isOn: $model.publishDryRun)
-            }
-
-            Section("操作") {
-                HStack(spacing: 12) {
-                    Button("安装依赖") { model.runInstall() }
-                    Button("更新依赖") { model.runUpdate() }
-                    Button("构建二进制") { model.runArchive() }
-                        .disabled(model.selectedPodspec == nil)
-                    Button(model.publishDryRun ? "发布预检 (Dry Run)" : "发布组件 (Publish)") { model.runPublish() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.selectedPodspec == nil)
-                }
-                Text("操作会调用当前环境的 pod bin：构建出 XCFramework 并发布到源码/二进制 spec 仓库与 binary-server。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-        .disabled(model.project == nil || model.isRunning)
-        .overlay {
-            if model.project == nil {
-                VStack(spacing: 12) {
-                    Image(systemName: "folder")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.secondary)
-                    Text("请选择工程")
-                        .font(.title2.bold())
-                    Text("从左下角选择包含 Podfile 或 podspec 的目录。")
-                        .foregroundStyle(.secondary)
-                }
-                .padding(24)
-            }
         }
     }
 }
@@ -493,18 +753,53 @@ private struct SettingsView: View {
         Form {
             Section("执行方式") {
                 LabeledContent("登录 Shell", value: model.toolchain?.shellPath ?? "检测中")
-                Text("应用读取登录 shell 环境后直接启动 pod，不拼接用户输入的 shell 命令。")
+                Text("应用读取登录 shell 环境后直接启动 pod / git，自动识别工作区内的 .imy-infra/home 与本地插件源码。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("发布能力") {
-                Label("MVP 禁用 pod bin auto", systemImage: "lock.shield")
-                Text("服务端已具备令牌认证和上传校验；客户端仍需完成发布预检、二次确认、审计和回滚编排后才会开放发布。")
+            Section("组件发布与依赖切换") {
+                Label("已启用 pod bin publish 事务发布与三态切换", systemImage: "checkmark.shield")
+                Text("支持在「组件发布管理」页面递增版本、预检、构建真机+模拟器 XCFramework 并发布至源码/二进制 Spec 仓库与 binary-server，在「App 依赖与安装」页面一键切换 local / source / binary 并安装。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+private struct ModeBadge: View {
+    let mode: String
+    let isOverride: Bool
+
+    var body: some View {
+        Text(label)
+            .font(.caption2.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.16))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
+    }
+
+    private var label: String {
+        let base: String
+        switch mode {
+        case "local": base = "LOCAL 本地源码"
+        case "source": base = "SOURCE 版本源码"
+        case "binary": base = "BINARY 二进制"
+        default: base = mode.uppercased()
+        }
+        return isOverride ? "\(base) · 覆盖" : base
+    }
+
+    private var color: Color {
+        switch mode {
+        case "local": .blue
+        case "source": .orange
+        case "binary": .green
+        default: .secondary
+        }
     }
 }
 

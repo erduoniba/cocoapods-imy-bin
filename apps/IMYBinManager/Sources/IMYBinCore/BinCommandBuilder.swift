@@ -94,12 +94,28 @@ public enum BinCommandBuilder {
         )
     }
 
+    public static func status(json: Bool = false) -> CommandSpec {
+        var arguments = ["bin", "status"]
+        if json {
+            arguments.append("--json")
+        }
+        return CommandSpec(
+            executableName: "pod",
+            arguments: arguments,
+            title: "查询组件依赖状态",
+            mutatesProject: false,
+            taskKind: .inspect
+        )
+    }
+
     public static func publish(
         podspecURL: URL,
         environment: BinEnvironment,
         configuration: BuildConfiguration,
         codeDependencies: Bool = false,
         keepIntermediates: Bool = false,
+        skipTag: Bool = false,
+        skipCodeSpec: Bool = false,
         dryRun: Bool = false
     ) -> CommandSpec {
         var arguments = [
@@ -115,6 +131,12 @@ public enum BinCommandBuilder {
         if keepIntermediates {
             arguments.append("--no-clean")
         }
+        if skipTag {
+            arguments.append("--skip-tag")
+        }
+        if skipCodeSpec {
+            arguments.append("--skip-code-spec")
+        }
         if dryRun {
             arguments.append("--dry-run")
         }
@@ -124,6 +146,25 @@ public enum BinCommandBuilder {
             title: dryRun ? "发布预检（dry-run）" : "发布组件",
             mutatesProject: false,
             taskKind: .publish
+        )
+    }
+
+    public static func commitComponentVersion(
+        podspecFileName: String,
+        version: String
+    ) -> CommandSpec {
+        CommandSpec(
+            executableName: "git",
+            arguments: [
+                "commit",
+                "-m",
+                "chore: 升级版本至 \(version)",
+                "--",
+                podspecFileName,
+            ],
+            title: "提交版本变更 \(version)",
+            mutatesProject: true,
+            taskKind: .custom
         )
     }
 

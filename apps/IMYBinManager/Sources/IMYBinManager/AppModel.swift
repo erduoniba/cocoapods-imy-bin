@@ -6,19 +6,19 @@ import IMYBinCore
 final class AppModel: ObservableObject {
     enum Page: String, CaseIterable, Identifiable {
         case overview
-        case server
         case dependencies
         case build
+        case server
         case logs
         case settings
 
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .overview: "概览"
+            case .overview: "工作台概览"
+            case .dependencies: "App 依赖与安装"
+            case .build: "组件发布管理"
             case .server: "制品服务"
-            case .dependencies: "工程依赖"
-            case .build: "组件任务"
             case .logs: "运行日志"
             case .settings: "设置"
             }
@@ -26,9 +26,9 @@ final class AppModel: ObservableObject {
         var systemImage: String {
             switch self {
             case .overview: "rectangle.3.group"
-            case .server: "shippingbox"
             case .dependencies: "square.3.layers.3d"
-            case .build: "hammer"
+            case .build: "paperplane.fill"
+            case .server: "shippingbox"
             case .logs: "terminal"
             case .settings: "gearshape"
             }
@@ -37,18 +37,39 @@ final class AppModel: ObservableObject {
 
     @Published var selection: Page? = .overview
     @Published private(set) var project: ProjectSnapshot?
-    @Published var selectedPodspec: URL?
+    @Published var selectedAppDirectory: URL? {
+        didSet {
+            guard selectedAppDirectory != oldValue else { return }
+            reloadAppDirectoryState()
+        }
+    }
+    @Published var selectedPodspec: URL? {
+        didSet {
+            guard selectedPodspec != oldValue else { return }
+            syncEditingVersionFromSelectedPodspec()
+        }
+    }
+    @Published private(set) var componentPodspecs: [ComponentPodspecInfo] = []
+    @Published var editingComponentVersion = ""
+    @Published var syncVersionToAppPodfile = true
+    @Published var autoCommitVersionBump = true
+    @Published var autoInstallAfterSwitch = false
+
     @Published private(set) var localComponents: [LocalComponentDependency] = []
     @Published private(set) var managedPolicy: ManagedPolicySnapshot?
     @Published var managedPolicyError: String?
     @Published var managedProjectKey = ""
     @Published var managedPolicyRevision = ""
+
     @Published var environment: BinEnvironment = .dev
     @Published var configuration: BuildConfiguration = .release
     @Published var buildMissingDependencies = false
     @Published var keepIntermediates = true
     @Published var codeDependencies = true
+    @Published var skipTag = false
+    @Published var skipCodeSpec = false
     @Published var publishDryRun = false
+
     @Published private(set) var toolchain: ToolchainReport?
     @Published private(set) var isInspectingToolchain = false
     @Published private(set) var taskHistory = TaskHistory()
@@ -99,9 +120,29 @@ final class AppModel: ObservableObject {
         selectedTask?.renderedLog ?? ""
     }
 
+    var selectedComponentInfo: ComponentPodspecInfo? {
+        guard let selectedPodspec else { return componentPodspecs.first }
+        let std = selectedPodspec.standardizedFileURL.path
+        return componentPodspecs.first { $0.podspecURL.standardizedFileURL.path == std }
+            ?? componentPodspecs.first
+    }
+
+    func publishedVersions(for componentName: String) -> [String] {
+        binaryComponents.first { $0.name == componentName }?.versions ?? []
+    }
+
+    func isVersionPublished(componentName: String, version: String?) -> Bool {
+        guard let version, !version.isEmpty else { return false }
+        return publishedVersions(for: componentName).contains(version)
+    }
+
+    func localPodspecInfo(named componentName: String) -> ComponentPodspecInfo? {
+        componentPodspecs.first { $0.name == componentName }
+    }
+
     func selectProject() {
         let panel = NSOpenPanel()
-        panel.title = "选择包含 Podfile 或 podspec 的工程目录"
+        panel.title = "选择工作区、App 工程目录或组件目录"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -114,22 +155,24 @@ final class AppModel: ObservableObject {
         do {
             let snapshot = try projectInspector.inspect(url)
             project = snapshot
-            selectedPodspec = snapshot.podspecURLs.first
-            localComponents = PodfileComponentInspector.inspect(from: snapshot.rootURL)
-            do {
-                managedPolicy = try ManagedPolicySnapshot.read(from: snapshot.rootURL)
-                managedPolicyError = nil
-                if let managedPolicy {
-                    managedProjectKey = managedPolicy.project
-                    managedPolicyRevision = managedPolicy.revision
-                } else if navigateToOverview {
-                    managedProjectKey = snapshot.rootURL.lastPathComponent
-                    managedPolicyRevision = ""
-                }
-            } catch {
-                managedPolicy = nil
-                managedPolicyError = error.localizedDescription
+            componentPodspecs = snapshot.podspecURLs.compactMap { try? PodspecInspector.inspect($0) }
+
+            if let currentPodspec = selectedPodspec,
+               snapshot.podspecURLs.contains(where: { $0.standardizedFileURL == currentPodspec.standardizedFileURL }) {
+                syncEditingVersionFromSelectedPodspec()
+            } else {
+                selectedPodspec = snapshot.podspecURLs.first
+                syncEditingVersionFromSelectedPodspec()
             }
+
+            if let currentApp = selectedAppDirectory,
+               snapshot.appDirectories.contains(where: { $0.standardizedFileURL == currentApp.standardizedFileURL }) {
+                reloadAppDirectoryState()
+            } else {
+                selectedAppDirectory = snapshot.primaryAppDirectory
+                reloadAppDirectoryState()
+            }
+
             if navigateToOverview {
                 selection = .overview
             }
@@ -141,6 +184,107 @@ final class AppModel: ObservableObject {
     func refreshProject() {
         guard let rootURL = project?.rootURL else { return }
         inspectProject(rootURL, navigateToOverview: false)
+    }
+
+    private func reloadAppDirectoryState() {
+        guard let appDir = selectedAppDirectory ?? project?.primaryAppDirectory else {
+            localComponents = []
+            managedPolicy = nil
+            managedPolicyError = nil
+            return
+        }
+        localComponents = PodfileComponentInspector.inspect(from: appDir)
+        do {
+            managedPolicy = try ManagedPolicySnapshot.read(from: appDir)
+            managedPolicyError = nil
+            if let managedPolicy {
+                managedProjectKey = managedPolicy.project
+                managedPolicyRevision = managedPolicy.revision
+            } else if managedProjectKey.isEmpty {
+                managedProjectKey = appDir.lastPathComponent
+                managedPolicyRevision = ""
+            }
+        } catch {
+            managedPolicy = nil
+            managedPolicyError = error.localizedDescription
+        }
+    }
+
+    private func syncEditingVersionFromSelectedPodspec() {
+        if let info = selectedComponentInfo {
+            editingComponentVersion = info.version
+        } else {
+            editingComponentVersion = ""
+        }
+    }
+
+    func navigateToPublish(componentName: String) {
+        if let match = componentPodspecs.first(where: { $0.name == componentName }) {
+            selectedPodspec = match.podspecURL
+        }
+        selection = .build
+    }
+
+    func bumpEditingVersion(_ kind: VersionBumpKind) {
+        let base = editingComponentVersion.isEmpty ? (selectedComponentInfo?.version ?? "0.1.0") : editingComponentVersion
+        if let bumped = PodspecInspector.bumpVersion(base, kind: kind) {
+            editingComponentVersion = bumped
+        } else {
+            alertMessage = "当前版本号 \(base) 无法自动递增，请手动输入 x.y.z 格式。"
+        }
+    }
+
+    func applyComponentVersionUpdate() {
+        guard let info = selectedComponentInfo else {
+            alertMessage = "请先选择一个组件 podspec"
+            return
+        }
+        let targetVersion = editingComponentVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try PodspecInspector.updateVersion(in: info.podspecURL, to: targetVersion)
+            if syncVersionToAppPodfile, let appDir = selectedAppDirectory ?? project?.primaryAppDirectory {
+                _ = try? PodfileComponentInspector.updateDependencyVersion(
+                    in: appDir,
+                    component: info.name,
+                    to: targetVersion
+                )
+            }
+            refreshProject()
+            if autoCommitVersionBump {
+                let commitCommand = BinCommandBuilder.commitComponentVersion(
+                    podspecFileName: info.podspecURL.lastPathComponent,
+                    version: targetVersion
+                )
+                run([commitCommand], in: info.repositoryURL)
+            }
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func syncSelectedComponentVersionToPodfile() {
+        guard let info = selectedComponentInfo else {
+            alertMessage = "请先选择一个组件"
+            return
+        }
+        guard let appDir = selectedAppDirectory ?? project?.primaryAppDirectory else {
+            alertMessage = "未找到包含 Podfile 的宿主 App 目录"
+            return
+        }
+        do {
+            let updated = try PodfileComponentInspector.updateDependencyVersion(
+                in: appDir,
+                component: info.name,
+                to: info.version
+            )
+            if updated {
+                refreshProject()
+            } else {
+                alertMessage = "在 \(appDir.lastPathComponent)/Podfile 中未找到 \(info.name) 的版本声明"
+            }
+        } catch {
+            alertMessage = error.localizedDescription
+        }
     }
 
     func refreshToolchain() {
@@ -182,14 +326,22 @@ final class AppModel: ObservableObject {
     }
 
     func runInstall() {
-        run(BinCommandBuilder.install())
+        guard let appDir = requireAppDirectory() else { return }
+        run([BinCommandBuilder.install()], in: appDir)
     }
 
     func runUpdate() {
-        run(BinCommandBuilder.update())
+        guard let appDir = requireAppDirectory() else { return }
+        run([BinCommandBuilder.update()], in: appDir)
+    }
+
+    func runStatus() {
+        guard let appDir = requireAppDirectory() else { return }
+        run([BinCommandBuilder.status()], in: appDir)
     }
 
     func runPolicySync() {
+        guard let appDir = requireAppDirectory() else { return }
         let projectKey = managedProjectKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !projectKey.isEmpty else {
             alertMessage = "请填写平台工程标识"
@@ -205,56 +357,88 @@ final class AppModel: ObservableObject {
             alertMessage = "策略同步仅接受无凭据的 HTTPS 服务地址（本机 HTTP 例外）"
             return
         }
-        run(BinCommandBuilder.syncPolicy(
+        run([BinCommandBuilder.syncPolicy(
             project: projectKey,
             revision: managedPolicyRevision.trimmingCharacters(in: .whitespacesAndNewlines),
             server: binaryServerAddress
-        ))
+        )], in: appDir)
     }
 
     func switchMode(_ dependency: ManagedDependency, to mode: String) {
-        run(BinCommandBuilder.switchMode(component: dependency.name, mode: mode))
+        switchLocalComponent(dependency.name, to: mode)
     }
 
     func switchLocalComponent(_ componentName: String, to mode: String) {
-        run(BinCommandBuilder.switchMode(component: componentName, mode: mode))
+        guard let appDir = requireAppDirectory() else { return }
+        var commands = [BinCommandBuilder.switchMode(component: componentName, mode: mode)]
+        if autoInstallAfterSwitch {
+            commands.append(BinCommandBuilder.install())
+        }
+        run(commands, in: appDir)
     }
 
     func switchAllComponents(to mode: String) {
-        run(BinCommandBuilder.switchAll(mode: mode))
+        guard let appDir = requireAppDirectory() else { return }
+        var commands = [BinCommandBuilder.switchAll(mode: mode)]
+        if autoInstallAfterSwitch {
+            commands.append(BinCommandBuilder.install())
+        }
+        run(commands, in: appDir)
     }
 
     func resetComponentModes() {
-        run(BinCommandBuilder.resetModes())
+        guard let appDir = requireAppDirectory() else { return }
+        var commands = [BinCommandBuilder.resetModes()]
+        if autoInstallAfterSwitch {
+            commands.append(BinCommandBuilder.install())
+        }
+        run(commands, in: appDir)
     }
 
     func runArchive() {
-        guard let selectedPodspec else {
+        guard let podspec = selectedPodspec ?? selectedComponentInfo?.podspecURL else {
             alertMessage = "请先选择一个 podspec"
             return
         }
-        run(BinCommandBuilder.archive(
-            podspecURL: selectedPodspec,
+        let workingDir = podspec.standardizedFileURL.deletingLastPathComponent()
+        run([BinCommandBuilder.archive(
+            podspecURL: podspec,
             environment: environment,
             configuration: configuration,
             buildMissingDependencies: buildMissingDependencies,
             keepIntermediates: keepIntermediates
-        ))
+        )], in: workingDir)
+    }
+
+    func runPublishDryRun() {
+        executePublish(dryRun: true)
     }
 
     func runPublish() {
-        guard let selectedPodspec else {
+        executePublish(dryRun: publishDryRun)
+    }
+
+    func runOfficialPublish() {
+        executePublish(dryRun: false)
+    }
+
+    private func executePublish(dryRun: Bool) {
+        guard let podspec = selectedPodspec ?? selectedComponentInfo?.podspecURL else {
             alertMessage = "请先选择一个 podspec"
             return
         }
-        run(BinCommandBuilder.publish(
-            podspecURL: selectedPodspec,
+        let workingDir = podspec.standardizedFileURL.deletingLastPathComponent()
+        let command = BinCommandBuilder.publish(
+            podspecURL: podspec,
             environment: environment,
             configuration: configuration,
             codeDependencies: codeDependencies,
             keepIntermediates: keepIntermediates,
-            dryRun: publishDryRun
-        ))
+            skipTag: skipTag,
+            skipCodeSpec: skipCodeSpec,
+            dryRun: dryRun
+        )
+        run([command], in: workingDir, refreshBinaryServerOnCompletion: !dryRun)
     }
 
     func cancelTask() {
@@ -279,23 +463,39 @@ final class AppModel: ObservableObject {
         selectedTaskID = id
     }
 
-    private func run(_ command: CommandSpec) {
-        guard let project else {
+    private func requireAppDirectory() -> URL? {
+        if let dir = selectedAppDirectory ?? project?.primaryAppDirectory {
+            return dir
+        }
+        alertMessage = "当前工程未找到包含 Podfile 的 App 目录"
+        return nil
+    }
+
+    private func run(
+        _ commands: [CommandSpec],
+        in workingDirectory: URL,
+        refreshBinaryServerOnCompletion: Bool = false
+    ) {
+        guard project != nil else {
             alertMessage = "请先选择工程目录"
             return
         }
+        guard let first = commands.first else { return }
         guard !isRunning else {
             alertMessage = "已有任务正在执行"
             return
         }
 
+        let combinedTitle = commands.map(\.title).joined(separator: " → ")
+        let combinedDisplay = commands.map(\.displayCommand).joined(separator: " && ")
+
         let taskID: UUID
         do {
             taskID = try taskHistory.enqueue(
-                kind: command.taskKind,
-                title: command.title,
-                workspaceURL: project.rootURL,
-                displayCommand: command.displayCommand
+                kind: first.taskKind,
+                title: combinedTitle,
+                workspaceURL: workingDirectory,
+                displayCommand: combinedDisplay
             )
             try taskHistory.start(taskID)
         } catch {
@@ -306,25 +506,39 @@ final class AppModel: ObservableObject {
         selection = .logs
 
         executionTask = Task {
+            var finalExitCode: Int32 = 0
             do {
                 let loaded = try await Task.detached(priority: .userInitiated) {
                     try LoginShellEnvironmentLoader().load()
                 }.value
                 var env = loaded.environment
-                Self.injectLocalInfraEnvironment(for: project.rootURL, into: &env)
-                let events = try processRunner.events(
-                    for: command,
-                    workingDirectory: project.rootURL,
-                    environment: env
-                )
-                for try await event in events {
-                    switch event {
-                    case .output(let text):
-                        try taskHistory.appendOutput(text, to: taskID)
-                    case .finished(let code):
-                        try taskHistory.finish(taskID, exitCode: code)
+                Self.injectLocalInfraEnvironment(for: workingDirectory, into: &env)
+
+                for (index, command) in commands.enumerated() {
+                    if index > 0 {
+                        try taskHistory.appendEvent(
+                            TaskEvent(kind: .phase, message: "继续执行：\(command.title) (\(command.displayCommand))"),
+                            to: taskID
+                        )
+                    }
+                    let events = try processRunner.events(
+                        for: command,
+                        workingDirectory: workingDirectory,
+                        environment: env
+                    )
+                    for try await event in events {
+                        switch event {
+                        case .output(let text):
+                            try taskHistory.appendOutput(text, to: taskID)
+                        case .finished(let code):
+                            finalExitCode = code
+                        }
+                    }
+                    if finalExitCode != 0 {
+                        break
                     }
                 }
+                try taskHistory.finish(taskID, exitCode: finalExitCode)
             } catch is CancellationError {
                 try? taskHistory.cancel(taskID)
             } catch {
@@ -333,12 +547,22 @@ final class AppModel: ObservableObject {
             }
             executionTask = nil
             refreshProject()
+            if refreshBinaryServerOnCompletion && finalExitCode == 0 {
+                refreshBinaryServer()
+            }
         }
     }
 
     private static func injectLocalInfraEnvironment(for workspaceURL: URL, into env: inout [String: String]) {
         let fm = FileManager.default
-        let candidates = [workspaceURL, workspaceURL.deletingLastPathComponent()]
+        var candidates: [URL] = []
+        var current = workspaceURL.standardizedFileURL
+        for _ in 0..<4 {
+            candidates.append(current)
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path { break }
+            current = parent
+        }
         for root in candidates {
             let infraHome = root.appendingPathComponent(".imy-infra/home")
             let binDev = infraHome.appendingPathComponent("bin_dev.yml")

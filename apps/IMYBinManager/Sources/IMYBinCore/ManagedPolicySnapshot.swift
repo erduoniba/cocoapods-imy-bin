@@ -128,6 +128,29 @@ public enum PodfileComponentInspector {
         return map
     }
 
+    @discardableResult
+    public static func updateDependencyVersion(
+        in projectURL: URL,
+        component: String,
+        to newVersion: String
+    ) throws -> Bool {
+        let podfileURL = projectURL.appendingPathComponent("Podfile")
+        guard FileManager.default.fileExists(atPath: podfileURL.path) else { return false }
+        let content = try String(contentsOf: podfileURL, encoding: .utf8)
+        let escapedName = NSRegularExpression.escapedPattern(for: component)
+        let pattern = #"((?:imy_pod|pod)\s+['"]\#(escapedName)(?:/[^'"]*)?['"]\s*,\s*['"])([^'"]+)(['"])"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let nsRange = NSRange(content.startIndex..<content.endIndex, in: content)
+        guard regex.firstMatch(in: content, range: nsRange) != nil else { return false }
+        let updated = regex.stringByReplacingMatches(
+            in: content,
+            range: nsRange,
+            withTemplate: "$1\(newVersion)$3"
+        )
+        try updated.write(to: podfileURL, atomically: true, encoding: .utf8)
+        return true
+    }
+
     private static func parseDependencyLine(
         _ line: String
     ) -> (name: String, version: String?, path: String?, isHardcodedPath: Bool)? {

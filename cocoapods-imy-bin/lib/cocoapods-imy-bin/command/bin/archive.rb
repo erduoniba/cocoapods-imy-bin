@@ -63,18 +63,24 @@ module Pod
         end
 
         def run
-          #清除之前的缓存
-          zip_dir = CBin::Config::Builder.instance.zip_dir
-          FileUtils.rm_rf(zip_dir) if File.exist?(zip_dir)
+          raw_spec = @podspec ? find_spec_file(@podspec) : code_spec_files.first
+          raise Informative, '当前目录下没有找到可用源码 podspec.' unless raw_spec
 
-          @spec = Specification.from_file(spec_file)
-          generate_project
+          spec_root_dir = File.dirname(File.expand_path(raw_spec.to_s))
+          Dir.chdir(spec_root_dir) do
+            #清除之前的缓存
+            zip_dir = CBin::Config::Builder.instance.zip_dir
+            FileUtils.rm_rf(zip_dir) if File.exist?(zip_dir)
 
-          source_specs = Array.new
-          source_specs.concat(build_root_spec)
-          source_specs.concat(build_dependencies) if @all_make
+            @spec = Specification.from_file(spec_file)
+            generate_project
 
-          source_specs
+            source_specs = Array.new
+            source_specs.concat(build_root_spec)
+            source_specs.concat(build_dependencies) if @all_make
+
+            source_specs
+          end
         end
 
         def build_root_spec

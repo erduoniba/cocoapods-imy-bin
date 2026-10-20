@@ -9,7 +9,21 @@ cd apps/IMYBinManager
 swift run IMYBinManager
 ```
 
-应用会从登录 shell 读取环境，因此 `ruby`、`bundle`、`pod` 应来自同一个 RVM、rbenv 或 asdf 环境。选择组件工程后，可执行安装、更新和二进制构建，并在日志页查看输出或取消任务。“制品服务”页可连接仓库内的 `binary-server/`，只读浏览已上传组件与版本；默认地址为 `http://localhost:8080`。
+应用会从登录 shell 读取环境，并自动识别工作区中的 `.imy-infra/home`（`CP_HOME_DIR`）与本地插件源码目录（`RUBYLIB`）。选择工作区根目录（如 `ImyBin`）、宿主 App 目录（如 `HDImyBinApp`）或单个组件目录（如 `HDDynamicPod`）后，应用会自动关联合并宿主 App 的 `Podfile` 与所有可发布组件的 `.podspec`。
+
+## 核心功能
+
+1. **App 依赖与安装管理（`App 依赖与安装` 页）**
+   - 扫描宿主 App `Podfile` 中的 `imy_pod` / `pod` 组件声明及 `.imy-bin-modes.yml` 本地覆盖状态。
+   - 支持单组件与全局三态切换（`local` 本地开发源码 / `source` 版本化源码 / `binary` XCFramework 二进制）及 `--reset` 重置。
+   - 一键执行 `pod bin install`、`pod bin update`、`pod bin status`，并支持勾选**“切换模式后自动执行 pod bin install”**。
+   - 联动 `binary-server` 实时标识当前 `Podfile` 声明版本是否已发布二进制制品。
+
+2. **组件发布管理（`组件发布管理` 页）**
+   - 自动解析工作区及 `Podfile` `:path` 关联组件的 `.podspec`（名称、当前版本、`ios.deployment_target`、静/动态 XCFramework 类型）。
+   - **版本管理**：支持一键递增版本号（`Patch +1` / `Minor +1` / `Major +1` 或手动输入），写入 `.podspec`，并可选**自动同步更新宿主 App `Podfile` 中的版本声明**与**自动提交组件 Git 仓库版本变更**。
+   - **发布前状态检查**：实时检测组件仓库 Git 分支、工作区是否干净（列出未提交文件）、当前版本 Git Tag 是否已存在，以及 `binary-server` 上的已发布版本列表。
+   - **构建与发布编排**：支持配置 `dev` / `debug_iphoneos` / `release_iphoneos`、`Release` / `Debug`、`--code-dependencies`、`--no-clean`、`--skip-tag`、`--skip-code-spec`；提供**仅构建二进制 (`pod bin archive`)**、**发布预检 (`pod bin publish --dry-run`)** 与带二次确认弹窗的**正式发布组件 (`pod bin publish`)**。
 
 ## 验证
 

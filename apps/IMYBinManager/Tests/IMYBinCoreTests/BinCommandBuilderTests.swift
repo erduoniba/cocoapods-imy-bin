@@ -38,6 +38,8 @@ import Testing
         configuration: .release,
         codeDependencies: true,
         keepIntermediates: false,
+        skipTag: true,
+        skipCodeSpec: true,
         dryRun: true
     )
     #expect(publish.taskKind == .publish)
@@ -48,8 +50,11 @@ import Testing
         "--env=dev",
         "--configuration=Release",
         "--code-dependencies",
+        "--skip-tag",
+        "--skip-code-spec",
         "--dry-run",
     ])
+    #expect(BinCommandBuilder.status(json: true).arguments == ["bin", "status", "--json"])
     #expect(BinCommandBuilder.switchAll(mode: "local").arguments == ["bin", "switch", "--all", "local"])
     #expect(BinCommandBuilder.resetModes().arguments == ["bin", "switch", "--reset"])
 }
