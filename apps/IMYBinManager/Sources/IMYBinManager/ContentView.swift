@@ -1798,6 +1798,24 @@ private struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section("CocoaPods 与插件环境配置") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("自定义 CP_HOME_DIR（私有 Spec 配置主目录）：").font(.subheadline)
+                    TextField("默认自动探测工作区内 .imy-infra/home", text: $model.customCPHomeDir)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospaced())
+
+                    Text("自定义插件源码路径（注入 RUBYLIB）：").font(.subheadline)
+                    TextField("默认自动探测工作区内 cocoapods-imy-bin-fork/cocoapods-imy-bin/lib", text: $model.customPluginLibDir)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospaced())
+
+                    Text("留空时应用将向上自动递归寻找工程内的基础设施目录。如需固定指向外部 Spec 根目录或定制版插件，可在此显式指定。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("执行方式") {
                 LabeledContent("登录 Shell", value: model.toolchain?.shellPath ?? "检测中")
                 Text("应用读取登录 shell 环境后直接启动 pod / git，自动识别工作区内的 .imy-infra/home 与本地插件源码。")

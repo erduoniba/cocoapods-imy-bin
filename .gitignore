@@ -1,2 +1,24 @@
 .DS_Store
+*.swp
+*~
 .idea/
+.vscode/
+.claude/
+.joycode/
+.ruby-lsp/
+
+# Xcode & SwiftPM
+*.xcuserstate
+xcuserdata/
+DerivedData/
+.build/
+dist/
+
+# Node & npm
+node_modules/
+npm-debug.log*
+
+# Ruby & Bundler
+.bundle/
+vendor/bundle/
+*.gem

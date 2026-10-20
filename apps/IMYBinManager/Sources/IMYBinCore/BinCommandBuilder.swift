@@ -182,10 +182,11 @@ public enum BinCommandBuilder {
     public static func testComponent(
         workspaceOrProjectURL: URL,
         scheme: String,
-        destination: String = "platform=iOS Simulator,name=iPhone 16"
+        destination: String? = nil
     ) -> CommandSpec {
         let isWorkspace = workspaceOrProjectURL.pathExtension == "xcworkspace"
         let flag = isWorkspace ? "-workspace" : "-project"
+        let dest = (destination != nil && !destination!.isEmpty) ? destination! : resolveAvailableSimulatorDestination()
         return CommandSpec(
             executableName: "xcodebuild",
             arguments: [
@@ -195,12 +196,43 @@ public enum BinCommandBuilder {
                 "-scheme",
                 scheme,
                 "-destination",
-                destination,
+                dest,
             ],
             title: "运行单元测试: \(scheme)",
             mutatesProject: false,
             taskKind: .custom
         )
+    }
+
+    public static func resolveAvailableSimulatorDestination() -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl", "list", "devices", "available", "-j"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let devices = json["devices"] as? [String: [[String: Any]]] {
+                // 1. First preference: booted iPhone simulator
+                for (_, list) in devices {
+                    if let booted = list.first(where: { ($0["state"] as? String) == "Booted" && (($0["name"] as? String)?.contains("iPhone") == true) }),
+                       let name = booted["name"] as? String {
+                        return "platform=iOS Simulator,name=\(name)"
+                    }
+                }
+                // 2. Second preference: any available iPhone simulator
+                for (_, list) in devices {
+                    if let first = list.first(where: { (($0["name"] as? String)?.contains("iPhone") == true) }),
+                       let name = first["name"] as? String {
+                        return "platform=iOS Simulator,name=\(name)"
+                    }
+                }
+            }
+        } catch {}
+        return "platform=iOS Simulator,name=iPhone 16"
     }
 
     public static func commitComponentVersion(

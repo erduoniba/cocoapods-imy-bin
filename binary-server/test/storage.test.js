@@ -52,3 +52,35 @@ test('returns no artifact when a component directory is missing', async () => {
     await fs.rm(root, { recursive: true, force: true })
   }
 })
+
+test('s3 storage driver stores artifacts and generates presigned download urls', async () => {
+  const s3 = createStorage(null, {
+    type: 's3',
+    endpoint: 'https://oss-cn-hangzhou.aliyuncs.com',
+    bucket: 'test-bucket',
+  })
+
+  await s3.ensureStorageRoot()
+  const uploadDir = await s3.createUploadDirectory()
+  const filename = path.join(uploadDir, s3.createTemporaryFilename())
+  await fs.writeFile(filename, 's3-content')
+
+  try {
+    assert.equal(s3.isZipFilename('package.zip'), true)
+    assert.equal(s3.isZipFilename('package.tar.gz'), false)
+
+    const uri = await s3.storeArtifact(filename, 'MyPod', '0.1.0')
+    assert.equal(uri, 's3://test-bucket/MyPod/0.1.0/artifact.zip')
+
+    const found = await s3.findArtifact('MyPod', '0.1.0')
+    assert.equal(found, filename)
+
+    const url = s3.getPresignedDownloadUrl('MyPod', '0.1.0')
+    assert.match(url, /^https:\/\/oss-cn-hangzhou\.aliyuncs\.com\/test-bucket\/MyPod\/0\.1\.0\/artifact\.zip/)
+
+    await s3.removeComponentVersion('MyPod', '0.1.0')
+    assert.equal(await s3.findArtifact('MyPod', '0.1.0'), null)
+  } finally {
+    await fs.rm(uploadDir, { recursive: true, force: true })
+  }
+})

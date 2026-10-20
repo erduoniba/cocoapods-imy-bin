@@ -1,4 +1,6 @@
 Copyright (c) 2018 tripleCC <triplec.linux@gmail.com>
+Copyright (c) 2020 su350380433
+Copyright (c) 2026 ImyBin Team <dev@imybin.org>
 
 MIT License
 

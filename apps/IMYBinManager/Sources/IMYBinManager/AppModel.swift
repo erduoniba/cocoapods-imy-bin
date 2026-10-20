@@ -131,6 +131,18 @@ final class AppModel: ObservableObject {
     @Published var logFilterMode: LogFilterMode = .all
     @Published var logSearchQuery = ""
 
+    // Toolchain & Custom Path Overrides
+    @Published var customCPHomeDir: String {
+        didSet {
+            UserDefaults.standard.set(customCPHomeDir, forKey: Self.customCPHomeDirKey)
+        }
+    }
+    @Published var customPluginLibDir: String {
+        didSet {
+            UserDefaults.standard.set(customPluginLibDir, forKey: Self.customPluginLibDirKey)
+        }
+    }
+
     @Published private(set) var toolchain: ToolchainReport?
     @Published private(set) var isInspectingToolchain = false
     @Published private(set) var taskHistory = TaskHistory(persistenceURL: TaskHistory.defaultPersistenceURL)
@@ -147,6 +159,8 @@ final class AppModel: ObservableObject {
     @Published var alertMessage: String?
 
     private static let binaryServerAddressKey = "binaryServerAddress"
+    private static let customCPHomeDirKey = "IMYBinManager.customCPHomeDir"
+    private static let customPluginLibDirKey = "IMYBinManager.customPluginLibDir"
     private let projectInspector = ProjectInspector()
     private let processRunner = ProcessRunner()
     private let binaryServerClient = BinaryServerClient()
@@ -155,6 +169,8 @@ final class AppModel: ObservableObject {
     init() {
         binaryServerAddress = UserDefaults.standard.string(forKey: Self.binaryServerAddressKey)
             ?? "http://localhost:8080"
+        customCPHomeDir = UserDefaults.standard.string(forKey: Self.customCPHomeDirKey) ?? ""
+        customPluginLibDir = UserDefaults.standard.string(forKey: Self.customPluginLibDirKey) ?? ""
         refreshToolchain()
         refreshRecents()
         refreshCacheSizes()
@@ -820,7 +836,7 @@ final class AppModel: ObservableObject {
             alertMessage = "在 Example 目录下未找到 .xcworkspace 或 .xcodeproj"
             return
         }
-        let scheme = "\(info.name)_Example"
+        let scheme = WorkspaceOpener.resolveTestScheme(for: info.name, in: wsOrProj)
         run([BinCommandBuilder.testComponent(workspaceOrProjectURL: wsOrProj, scheme: scheme)], in: exampleDir, logDestination: .componentWindow)
     }
 
@@ -1244,7 +1260,12 @@ final class AppModel: ObservableObject {
                     try LoginShellEnvironmentLoader().load()
                 }.value
                 var env = loaded.environment
-                Self.injectLocalInfraEnvironment(for: workingDirectory, into: &env)
+                Self.injectLocalInfraEnvironment(
+                    for: workingDirectory,
+                    customCPHome: customCPHomeDir,
+                    customPluginLib: customPluginLibDir,
+                    into: &env
+                )
 
                 for (index, command) in commands.enumerated() {
                     if index > 0 {
@@ -1286,8 +1307,25 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private static func injectLocalInfraEnvironment(for workspaceURL: URL, into env: inout [String: String]) {
+    private static func injectLocalInfraEnvironment(
+        for workspaceURL: URL,
+        customCPHome: String = "",
+        customPluginLib: String = "",
+        into env: inout [String: String]
+    ) {
         let fm = FileManager.default
+        let trimmedCP = customCPHome.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCP.isEmpty, fm.fileExists(atPath: trimmedCP) {
+            env["CP_HOME_DIR"] = trimmedCP
+        }
+        let trimmedPlugin = customPluginLib.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedPlugin.isEmpty, fm.fileExists(atPath: trimmedPlugin) {
+            let existing = env["RUBYLIB"] ?? ""
+            if !existing.contains(trimmedPlugin) {
+                env["RUBYLIB"] = existing.isEmpty ? trimmedPlugin : "\(trimmedPlugin):\(existing)"
+            }
+        }
+
         var candidates: [URL] = []
         var current = workspaceURL.standardizedFileURL
         for _ in 0..<5 {

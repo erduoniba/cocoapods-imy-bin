@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  binary-server:
+    build: .
+    container_name: imybin-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=production
+      - HOST=0.0.0.0
+      - PORT=8080
+      - MONGODB_URI=mongodb://mongo:27017/binary_database
+      - BINARY_SERVER_TOKEN=0123456789abcdef0123456789abcdef
+      - BINARY_STORAGE_ROOT=/app/.binary
+      - PLATFORM_API_ENABLED=false
+    volumes:
+      - binary_artifacts:/app/.binary
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  mongo:
+    image: mongo:7.0
+    container_name: imybin-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  binary_artifacts:
+  mongo_data:

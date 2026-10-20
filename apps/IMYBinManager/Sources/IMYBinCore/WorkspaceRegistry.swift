@@ -191,6 +191,38 @@ public enum WorkspaceOpener {
         runOpenCommand(["-a", "Terminal", directoryURL.path])
     }
 
+    public static func resolveTestScheme(for componentName: String, in workspaceOrProjectURL: URL) -> String {
+        let isWorkspace = workspaceOrProjectURL.pathExtension == "xcworkspace"
+        let flag = isWorkspace ? "-workspace" : "-project"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcodebuild")
+        process.arguments = ["-list", "-json", flag, workspaceOrProjectURL.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let root = (json["workspace"] ?? json["project"]) as? [String: Any],
+               let schemes = root["schemes"] as? [String] {
+                if schemes.contains("\(componentName)_Example") {
+                    return "\(componentName)_Example"
+                }
+                if schemes.contains("\(componentName)-Example") {
+                    return "\(componentName)-Example"
+                }
+                if schemes.contains(componentName) {
+                    return componentName
+                }
+                if let first = schemes.first {
+                    return first
+                }
+            }
+        } catch {}
+        return "\(componentName)_Example"
+    }
+
     private static func runOpenCommand(_ arguments: [String]) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
