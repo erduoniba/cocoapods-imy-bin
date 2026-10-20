@@ -335,6 +335,31 @@ public enum PodspecInspector {
         return "\(major).\(minor).\(patch)"
     }
 
+    public static func bumpBetaVersion(_ version: String) -> String {
+        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let regex = try? NSRegularExpression(pattern: #"^(.*?[-.]beta\.?)([0-9]+)$"#),
+           let match = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)),
+           match.numberOfRanges == 3,
+           let prefixRange = Range(match.range(at: 1), in: trimmed),
+           let numRange = Range(match.range(at: 2), in: trimmed),
+           let currentNum = Int(trimmed[numRange]) {
+            let prefix = String(trimmed[prefixRange])
+            return "\(prefix)\(currentNum + 1)"
+        }
+
+        if trimmed.hasSuffix("-beta") {
+            return "\(trimmed).1"
+        }
+
+        let core = trimmed.split(separator: "-", maxSplits: 1).first.map(String.init) ?? trimmed
+        return "\(core)-beta.1"
+    }
+
+    public static func promoteBetaToRelease(_ version: String) -> String {
+        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.split(separator: "-", maxSplits: 1).first.map(String.init) ?? trimmed
+    }
+
     public static func updateVersion(in podspecURL: URL, to newVersion: String) throws {
         let trimmed = newVersion.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isValidVersion(trimmed) else {

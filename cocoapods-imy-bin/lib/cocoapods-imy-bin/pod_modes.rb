@@ -5,7 +5,7 @@ require 'yaml'
 module CBin
   module PodModes
     FILENAME = '.imy-bin-modes.yml'.freeze
-    MODES = %w[local source binary].freeze
+    MODES = %w[local source binary branch].freeze
     REMOTE_MODES = %w[source binary].freeze
     NAME_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\z/
 

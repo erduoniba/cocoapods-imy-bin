@@ -9,7 +9,7 @@ module Pod
         self.summary = '切换单个或全部组件的本地/源码/二进制依赖模式并安装.'
         self.arguments = [
           CLAide::Argument.new('POD', false),
-          CLAide::Argument.new('local|source|binary', false)
+          CLAide::Argument.new('local|source|binary|branch', false)
         ]
 
         def self.options
@@ -43,7 +43,7 @@ module Pod
           return if @reset
 
           unless CBin::PodModes::MODES.include?(@mode)
-            raise Informative, '模式必须是 local、source 或 binary.'
+            raise Informative, '模式必须是 local、source、binary 或 branch.'
           end
 
           if @all
@@ -128,6 +128,15 @@ module Pod
             has_local_path = !(imy_def && imy_def['path'].to_s.empty?) && (imy_def || hardcoded_local)
             unless has_local_path
               raise Informative, "#{pod_name} 未声明本地 :path，无法切换为 local 模式."
+            end
+          end
+
+          if @mode == 'branch'
+            has_branch_info = imy_def && (!imy_def['branch'].to_s.empty? || !imy_def['git'].to_s.empty? || !imy_def['tag'].to_s.empty?)
+            config_entry = podfile.component_config_entry(pod_name)
+            has_branch_info ||= config_entry && (!config_entry['branch'].to_s.empty? || !config_entry['git'].to_s.empty? || !config_entry['tag'].to_s.empty?)
+            unless has_branch_info
+              raise Informative, "#{pod_name} 未声明 git 或 branch/tag，无法切换为 branch 模式."
             end
           end
         end

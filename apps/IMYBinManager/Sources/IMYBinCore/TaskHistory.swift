@@ -1,6 +1,6 @@
 import Foundation
 
-public enum TaskKind: String, CaseIterable, Identifiable, Sendable {
+public enum TaskKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case inspect
     case install
     case update
@@ -26,7 +26,7 @@ public enum TaskKind: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-public enum TaskState: String, CaseIterable, Sendable {
+public enum TaskState: String, Codable, CaseIterable, Sendable {
     case queued
     case running
     case cancelling
@@ -53,14 +53,14 @@ public enum TaskState: String, CaseIterable, Sendable {
     }
 }
 
-public enum TaskEventKind: String, Sendable {
+public enum TaskEventKind: String, Codable, Sendable {
     case output
     case phase
     case warning
     case error
 }
 
-public struct TaskEvent: Equatable, Sendable, Identifiable {
+public struct TaskEvent: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
     public let kind: TaskEventKind
     public let message: String
@@ -92,7 +92,23 @@ public struct TaskEvent: Equatable, Sendable, Identifiable {
     }
 }
 
-public struct TaskRecord: Equatable, Sendable, Identifiable {
+public enum LogFilterMode: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case phaseAndWarning
+    case errorOnly
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .all: "全部"
+        case .phaseAndWarning: "仅看阶段与警告"
+        case .errorOnly: "仅看错误"
+        }
+    }
+}
+
+public struct TaskRecord: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
     public let kind: TaskKind
     public let title: String
@@ -127,6 +143,33 @@ public struct TaskRecord: Equatable, Sendable, Identifiable {
     public var renderedLog: String {
         let command = displayCommand.map { "$ \($0)\n" } ?? ""
         return command + events.map(\.renderedText).joined()
+    }
+
+    public func filteredLog(mode: LogFilterMode = .all, query: String = "") -> String {
+        let command = displayCommand.map { "$ \($0)\n" } ?? ""
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        let filteredEvents = events.filter { event in
+            switch mode {
+            case .all:
+                break
+            case .phaseAndWarning:
+                guard event.kind == .phase || event.kind == .warning else { return false }
+            case .errorOnly:
+                guard event.kind == .error || event.message.localizedCaseInsensitiveContains("error:") else { return false }
+            }
+
+            if !trimmedQuery.isEmpty {
+                return event.message.lowercased().contains(trimmedQuery)
+            }
+            return true
+        }
+
+        return command + filteredEvents.map(\.renderedText).joined()
+    }
+
+    public func exportLog(to fileURL: URL) throws {
+        try renderedLog.write(to: fileURL, atomically: true, encoding: .utf8)
     }
 
     mutating func transition(to state: TaskState, at date: Date) throws {
@@ -183,13 +226,31 @@ public struct TaskHistory: Equatable, Sendable {
     public private(set) var records: [TaskRecord]
     public let maximumRecords: Int
     public let eventLimit: Int
+    public let persistenceURL: URL?
 
-    public init(maximumRecords: Int = 50, eventLimit: Int = 1_000) {
+    public static let defaultPersistenceURL: URL = {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        return appSupport
+            .appendingPathComponent("IMYBinManager", isDirectory: true)
+            .appendingPathComponent("history", isDirectory: true)
+            .appendingPathComponent("task_history.json")
+    }()
+
+    public init(maximumRecords: Int = 50, eventLimit: Int = 1_000, persistenceURL: URL? = nil) {
         precondition(maximumRecords > 0)
         precondition(eventLimit > 0)
-        self.records = []
         self.maximumRecords = maximumRecords
         self.eventLimit = eventLimit
+        self.persistenceURL = persistenceURL
+
+        if let persistenceURL, FileManager.default.fileExists(atPath: persistenceURL.path),
+           let data = try? Data(contentsOf: persistenceURL),
+           let loaded = try? JSONDecoder().decode([TaskRecord].self, from: data) {
+            self.records = Array(loaded.filter(\.state.isTerminal).suffix(maximumRecords))
+        } else {
+            self.records = []
+        }
     }
 
     public var activeTask: TaskRecord? {
@@ -262,6 +323,7 @@ public struct TaskHistory: Equatable, Sendable {
                 : "进程结束，退出码 \(exitCode)"
             record.append(TaskEvent(kind: record.state == .succeeded ? .phase : .error, message: message, occurredAt: date), eventLimit: limit)
         }
+        saveToDisk()
     }
 
     public mutating func fail(_ id: UUID, summary: String, at date: Date = Date()) throws {
@@ -270,6 +332,7 @@ public struct TaskHistory: Equatable, Sendable {
             try record.fail(summary: summary, at: date)
             record.append(TaskEvent(kind: .error, message: summary, occurredAt: date), eventLimit: limit)
         }
+        saveToDisk()
     }
 
     public mutating func cancel(_ id: UUID, at date: Date = Date()) throws {
@@ -278,10 +341,26 @@ public struct TaskHistory: Equatable, Sendable {
             try record.cancel(at: date)
             record.append(TaskEvent(kind: .phase, message: "任务已取消", occurredAt: date), eventLimit: limit)
         }
+        saveToDisk()
     }
 
     public mutating func clearFinishedRecords() {
         records.removeAll { $0.state.isTerminal }
+        saveToDisk()
+    }
+
+    private func saveToDisk() {
+        guard let persistenceURL else { return }
+        do {
+            let dir = persistenceURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(records)
+            try data.write(to: persistenceURL, options: .atomic)
+        } catch {
+            // Ignore error gracefully
+        }
     }
 
     private mutating func update(_ id: UUID, mutate: (inout TaskRecord) throws -> Void) throws {

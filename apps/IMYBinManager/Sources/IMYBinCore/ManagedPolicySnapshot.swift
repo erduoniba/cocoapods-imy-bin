@@ -5,18 +5,35 @@ public struct ManagedDependency: Codable, Equatable, Sendable, Identifiable {
     public let version: String
     public let mode: String
     public var id: String { name }
+
+    public init(name: String, version: String, mode: String) {
+        self.name = name
+        self.version = version
+        self.mode = mode
+    }
 }
 
 public struct ManagedTarget: Codable, Equatable, Sendable, Identifiable {
     public let name: String
     public let dependencies: [ManagedDependency]
     public var id: String { name }
+
+    public init(name: String, dependencies: [ManagedDependency]) {
+        self.name = name
+        self.dependencies = dependencies
+    }
 }
 
 public struct ManagedPolicySnapshot: Codable, Equatable, Sendable {
     public let project: String
     public let revision: String
     public let targets: [ManagedTarget]
+
+    public init(project: String, revision: String, targets: [ManagedTarget]) {
+        self.project = project
+        self.revision = revision
+        self.targets = targets
+    }
 
     public static func read(from projectURL: URL) throws -> ManagedPolicySnapshot? {
         let filename = projectURL.appendingPathComponent(".imy-bin-policy.json")
@@ -48,6 +65,11 @@ public struct ComponentConfigEntry: Codable, Equatable, Sendable, Identifiable {
     public var version: String?
     public var mode: String
     public var path: String?
+    public var git: String?
+    public var branch: String?
+    public var tag: String?
+    public var commit: String?
+    public var targets: [String]?
     public var enabled: Bool
 
     public var id: String { name }
@@ -57,22 +79,36 @@ public struct ComponentConfigEntry: Codable, Equatable, Sendable, Identifiable {
         return !path.isEmpty
     }
 
+    public var isBranchMode: Bool {
+        mode == "branch"
+    }
+
     public init(
         name: String,
         version: String?,
         mode: String = "binary",
         path: String? = nil,
+        git: String? = nil,
+        branch: String? = nil,
+        tag: String? = nil,
+        commit: String? = nil,
+        targets: [String]? = nil,
         enabled: Bool = true
     ) {
         self.name = name
         self.version = version
         self.mode = mode
         self.path = path
+        self.git = git
+        self.branch = branch
+        self.tag = tag
+        self.commit = commit
+        self.targets = targets
         self.enabled = enabled
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, version, mode, path, enabled
+        case name, version, mode, path, git, branch, tag, commit, targets, enabled
     }
 
     public init(from decoder: Decoder) throws {
@@ -81,6 +117,11 @@ public struct ComponentConfigEntry: Codable, Equatable, Sendable, Identifiable {
         version = try container.decodeIfPresent(String.self, forKey: .version)
         mode = try container.decodeIfPresent(String.self, forKey: .mode) ?? "binary"
         path = try container.decodeIfPresent(String.self, forKey: .path)
+        git = try container.decodeIfPresent(String.self, forKey: .git)
+        branch = try container.decodeIfPresent(String.self, forKey: .branch)
+        tag = try container.decodeIfPresent(String.self, forKey: .tag)
+        commit = try container.decodeIfPresent(String.self, forKey: .commit)
+        targets = try container.decodeIfPresent([String].self, forKey: .targets)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
     }
 }
@@ -243,6 +284,18 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
         return true
     }
 
+    public static func exportTable(_ table: ComponentConfigTable, to destinationURL: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(table)
+        try data.write(to: destinationURL, options: .atomic)
+    }
+
+    public static func importTable(from sourceURL: URL) throws -> ComponentConfigTable {
+        let data = try Data(contentsOf: sourceURL)
+        return try JSONDecoder().decode(ComponentConfigTable.self, from: data)
+    }
+
     public static func relativePath(from baseDirectoryURL: URL, to targetDirectoryURL: URL) -> String {
         let baseComponents = baseDirectoryURL.standardizedFileURL.pathComponents
         let targetComponents = targetDirectoryURL.standardizedFileURL.pathComponents
@@ -265,6 +318,10 @@ public struct LocalComponentDependency: Equatable, Sendable, Identifiable {
     public let name: String
     public let declaredVersion: String?
     public let localPath: String?
+    public let git: String?
+    public let branch: String?
+    public let tag: String?
+    public let targets: [String]?
     public let effectiveMode: String
     public let overrideMode: String?
 
@@ -278,12 +335,20 @@ public struct LocalComponentDependency: Equatable, Sendable, Identifiable {
         name: String,
         declaredVersion: String?,
         localPath: String?,
+        git: String? = nil,
+        branch: String? = nil,
+        tag: String? = nil,
+        targets: [String]? = nil,
         effectiveMode: String,
         overrideMode: String?
     ) {
         self.name = name
         self.declaredVersion = declaredVersion
         self.localPath = localPath
+        self.git = git
+        self.branch = branch
+        self.tag = tag
+        self.targets = targets
         self.effectiveMode = effectiveMode
         self.overrideMode = overrideMode
     }
@@ -302,6 +367,10 @@ public enum PodfileComponentInspector {
                         name: entry.name,
                         declaredVersion: entry.version,
                         localPath: entry.path,
+                        git: entry.git,
+                        branch: entry.branch,
+                        tag: entry.tag,
+                        targets: entry.targets,
                         effectiveMode: effectiveMode,
                         overrideMode: overrideMode ?? entry.mode
                     )
@@ -360,7 +429,7 @@ public enum PodfileComponentInspector {
             let parts = line.split(separator: ":", maxSplits: 1).map {
                 $0.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
             }
-            if parts.count == 2, ["local", "source", "binary"].contains(parts[1]) {
+            if parts.count == 2, ["local", "source", "binary", "branch"].contains(parts[1]) {
                 map[parts[0]] = parts[1]
             }
         }

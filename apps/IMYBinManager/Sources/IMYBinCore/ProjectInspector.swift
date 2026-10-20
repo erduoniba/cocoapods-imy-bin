@@ -85,9 +85,10 @@ public struct ProjectInspector {
             }
         }
 
-        // If opening a component directory directly, also discover sibling Host App directories that depend on it
-        let componentNames = Set(podspecMap.values.map { $0.deletingPathExtension().lastPathComponent })
-        if !componentNames.isEmpty {
+        // If opening a component directory directly (has a top-level .podspec), also discover sibling Host App directories that depend on it
+        let directPodspecs = (try? topLevelPodspecs(in: rootURL)) ?? []
+        if !directPodspecs.isEmpty {
+            let componentNames = Set(directPodspecs.map { $0.deletingPathExtension().lastPathComponent })
             let parentURL = rootURL.standardizedFileURL.deletingLastPathComponent()
             if let siblings = try? fileManager.contentsOfDirectory(
                 at: parentURL,
@@ -97,6 +98,7 @@ public struct ProjectInspector {
                 for sibling in siblings {
                     let stdSibling = sibling.standardizedFileURL
                     guard !excludedNames.contains(stdSibling.lastPathComponent),
+                          stdSibling.path != rootURL.standardizedFileURL.path,
                           exists("Podfile", in: stdSibling) else { continue }
                     let siblingPodfile = (try? String(contentsOf: stdSibling.appendingPathComponent("Podfile"), encoding: .utf8)) ?? ""
                     let siblingDeps = PodfileComponentInspector.inspect(from: stdSibling)

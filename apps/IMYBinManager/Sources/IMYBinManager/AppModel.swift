@@ -105,9 +105,35 @@ final class AppModel: ObservableObject {
     @Published var skipCodeSpec = false
     @Published var publishDryRun = false
 
+    // REQ-01: Recent Workspaces & Favorites
+    @Published private(set) var recentWorkspaces: [RecentWorkspace] = []
+    @Published private(set) var favoriteWorkspaces: [RecentWorkspace] = []
+    public let workspaceRegistry = WorkspaceRegistry()
+
+    // REQ-02: Search & Filter in Config Tables
+    @Published var appSearchText = ""
+    @Published var appModeFilter = "all" // all, local, source, binary, branch, unreleased
+    @Published var compSearchText = ""
+    @Published var compModeFilter = "all"
+
+    // REQ-04: Git Branches & Artifact Inspection
+    @Published private(set) var currentGitBranchInfo: GitBranchInfo?
+    @Published private(set) var latestArtifactReport: ArtifactReport?
+
+    // REQ-06: Reverse Impact Analysis
+    @Published private(set) var reverseImpactReport: ReverseImpactReport?
+
+    // REQ-03: Cache Sizes
+    @Published private(set) var derivedDataSize: Int64 = 0
+    @Published private(set) var tmpReleaseSize: Int64 = 0
+
+    // REQ-07: Log Filtering
+    @Published var logFilterMode: LogFilterMode = .all
+    @Published var logSearchQuery = ""
+
     @Published private(set) var toolchain: ToolchainReport?
     @Published private(set) var isInspectingToolchain = false
-    @Published private(set) var taskHistory = TaskHistory()
+    @Published private(set) var taskHistory = TaskHistory(persistenceURL: TaskHistory.defaultPersistenceURL)
     @Published private(set) var selectedTaskID: UUID?
     @Published var binaryServerAddress: String {
         didSet {
@@ -130,6 +156,8 @@ final class AppModel: ObservableObject {
         binaryServerAddress = UserDefaults.standard.string(forKey: Self.binaryServerAddressKey)
             ?? "http://localhost:8080"
         refreshToolchain()
+        refreshRecents()
+        refreshCacheSizes()
     }
 
     var hostAppDirectories: [URL] {
@@ -158,7 +186,50 @@ final class AppModel: ObservableObject {
     }
 
     var log: String {
-        selectedTask?.renderedLog ?? ""
+        guard let task = selectedTask else { return "" }
+        return task.filteredLog(mode: logFilterMode, query: logSearchQuery)
+    }
+
+    var filteredConfigEntries: [ComponentConfigEntry] {
+        guard let components = configTable?.components else { return [] }
+        let query = appSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return components.filter { entry in
+            if !query.isEmpty && !entry.name.lowercased().contains(query) && !(entry.version?.lowercased().contains(query) ?? false) {
+                return false
+            }
+            switch appModeFilter {
+            case "all": return true
+            case "local": return entry.mode == "local"
+            case "source": return entry.mode == "source"
+            case "binary": return entry.mode == "binary"
+            case "branch": return entry.mode == "branch"
+            case "unreleased":
+                guard entry.mode == "binary" else { return false }
+                return !isVersionPublished(componentName: entry.name, version: entry.version)
+            default: return true
+            }
+        }
+    }
+
+    var filteredComponentExampleEntries: [ComponentConfigEntry] {
+        guard let components = componentConfigTable?.components else { return [] }
+        let query = compSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return components.filter { entry in
+            if !query.isEmpty && !entry.name.lowercased().contains(query) && !(entry.version?.lowercased().contains(query) ?? false) {
+                return false
+            }
+            switch compModeFilter {
+            case "all": return true
+            case "local": return entry.mode == "local"
+            case "source": return entry.mode == "source"
+            case "binary": return entry.mode == "binary"
+            case "branch": return entry.mode == "branch"
+            case "unreleased":
+                guard entry.mode == "binary" else { return false }
+                return !isVersionPublished(componentName: entry.name, version: entry.version)
+            default: return true
+            }
+        }
     }
 
     var selectedComponentInfo: ComponentPodspecInfo? {
@@ -228,6 +299,10 @@ final class AppModel: ObservableObject {
             if navigateToOverview {
                 selection = .overview
             }
+            let kind: WorkspaceKind = snapshot.podspecURLs.isEmpty ? .hostApp : (snapshot.hasPodfile ? .workspace : .component)
+            workspaceRegistry.addOrUpdate(url: url, kind: kind)
+            refreshRecents()
+            refreshCacheSizes()
         } catch {
             alertMessage = error.localizedDescription
         }
@@ -297,6 +372,9 @@ final class AppModel: ObservableObject {
             defaultEnabledNames: declaredDepNames
         )
         hasSavedComponentConfigTable = ComponentConfigTable.exists(in: exampleDir)
+        refreshGitBranchInfo()
+        refreshLatestArtifactReport()
+        refreshReverseImpactReport()
     }
 
     // MARK: - Host App Config Table (.imy-bin-config.json)
@@ -524,6 +602,327 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func bumpEditingBetaVersion() {
+        let base = editingComponentVersion.isEmpty ? (selectedComponentInfo?.version ?? "0.1.0") : editingComponentVersion
+        editingComponentVersion = PodspecInspector.bumpBetaVersion(base)
+    }
+
+    func promoteEditingBetaToRelease() {
+        let base = editingComponentVersion.isEmpty ? (selectedComponentInfo?.version ?? "0.1.0") : editingComponentVersion
+        editingComponentVersion = PodspecInspector.promoteBetaToRelease(base)
+    }
+
+    func refreshRecents() {
+        recentWorkspaces = workspaceRegistry.allRecents()
+        favoriteWorkspaces = workspaceRegistry.favorites()
+    }
+
+    func toggleWorkspaceFavorite(_ url: URL) {
+        workspaceRegistry.toggleFavorite(url: url)
+        refreshRecents()
+    }
+
+    func removeRecentWorkspace(_ url: URL) {
+        workspaceRegistry.remove(url: url)
+        refreshRecents()
+    }
+
+    func openHostAppInXcode() {
+        if let dir = selectedAppDirectory ?? hostAppDirectories.first ?? project?.rootURL {
+            WorkspaceOpener.openInXcode(at: dir)
+        }
+    }
+
+    func showHostAppInFinder() {
+        if let dir = selectedAppDirectory ?? hostAppDirectories.first ?? project?.rootURL {
+            WorkspaceOpener.showInFinder(at: dir)
+        }
+    }
+
+    func openHostAppInTerminal() {
+        if let dir = selectedAppDirectory ?? hostAppDirectories.first ?? project?.rootURL {
+            WorkspaceOpener.openInTerminal(at: dir)
+        }
+    }
+
+    func openComponentInXcode() {
+        if let dir = selectedComponentInfo?.exampleDirectoryURL ?? selectedComponentInfo?.repositoryURL {
+            WorkspaceOpener.openInXcode(at: dir)
+        }
+    }
+
+    func showComponentInFinder() {
+        if let dir = selectedComponentInfo?.repositoryURL {
+            WorkspaceOpener.showInFinder(at: dir)
+        }
+    }
+
+    func openComponentInTerminal() {
+        if let dir = selectedComponentInfo?.repositoryURL {
+            WorkspaceOpener.openInTerminal(at: dir)
+        }
+    }
+
+    func refreshGitBranchInfo() {
+        guard let repo = selectedComponentInfo?.repositoryURL else {
+            currentGitBranchInfo = nil
+            return
+        }
+        currentGitBranchInfo = GitBranchManager.branches(in: repo)
+    }
+
+    func checkoutBranch(_ branch: String) {
+        guard let repo = selectedComponentInfo?.repositoryURL else { return }
+        do {
+            try GitBranchManager.checkout(branch: branch, in: repo)
+            refreshGitBranchInfo()
+            refreshProject()
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func pullCurrentBranch() {
+        guard let repo = selectedComponentInfo?.repositoryURL else { return }
+        do {
+            try GitBranchManager.pull(in: repo)
+            refreshGitBranchInfo()
+            refreshProject()
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func fetchRemoteBranches(for gitURL: String) async -> [String] {
+        await Task.detached(priority: .userInitiated) {
+            GitBranchManager.remoteHeads(for: gitURL)
+        }.value
+    }
+
+    func refreshCacheSizes() {
+        Task.detached(priority: .background) {
+            let dd = CacheManager.directorySize(at: CacheManager.derivedDataDirectoryURL)
+            let tmp = CacheManager.directorySize(at: CacheManager.tmpReleaseDirectoryURL)
+            await MainActor.run {
+                self.derivedDataSize = dd
+                self.tmpReleaseSize = tmp
+            }
+        }
+    }
+
+    func runRepoUpdate(all: Bool = false) {
+        guard let appDir = requireAppDirectory() else { return }
+        run([BinCommandBuilder.repoUpdate(all: all)], in: appDir, logDestination: .appWindow)
+    }
+
+    func cleanSelectedComponentCache(andInstall: Bool = false) {
+        guard let componentName = selectedComponentInfo?.name else { return }
+        let appDir = selectedAppDirectory ?? hostAppDirectories.first
+        let report = CacheManager.cleanComponentCache(componentName: componentName, projectDirectoryURL: appDir)
+        refreshCacheSizes()
+        if andInstall {
+            runInstall()
+        } else {
+            alertMessage = "已清理组件 \(componentName) 缓存文件 \(report.removedPaths.count) 项"
+        }
+    }
+
+    func cleanComponentCache(named name: String) {
+        let appDir = selectedAppDirectory ?? hostAppDirectories.first
+        let report = CacheManager.cleanComponentCache(componentName: name, projectDirectoryURL: appDir)
+        refreshCacheSizes()
+        alertMessage = "已清理组件 \(name) 缓存文件 \(report.removedPaths.count) 项"
+    }
+
+    func runCleanCocoaPodsCache() {
+        guard let appDir = requireAppDirectory() else { return }
+        run([BinCommandBuilder.cleanCocoaPodsCache()], in: appDir, logDestination: .appWindow)
+    }
+
+    func cleanDerivedData() {
+        do {
+            try CacheManager.cleanDirectoryContents(at: CacheManager.derivedDataDirectoryURL)
+            refreshCacheSizes()
+            alertMessage = "已清理 Xcode DerivedData 缓存"
+        } catch {
+            alertMessage = "清理 DerivedData 失败：\(error.localizedDescription)"
+        }
+    }
+
+    func cleanTmpRelease() {
+        do {
+            try CacheManager.cleanDirectoryContents(at: CacheManager.tmpReleaseDirectoryURL)
+            refreshCacheSizes()
+            alertMessage = "已清理临时构建目录"
+        } catch {
+            alertMessage = "清理临时构建目录失败：\(error.localizedDescription)"
+        }
+    }
+
+    func refreshLatestArtifactReport() {
+        guard let comp = selectedComponentInfo else {
+            latestArtifactReport = nil
+            return
+        }
+        latestArtifactReport = ArtifactInspector.inspectLatestArtifact(for: comp.name)
+    }
+
+    func refreshReverseImpactReport() {
+        guard let project, let comp = selectedComponentInfo else {
+            reverseImpactReport = nil
+            return
+        }
+        reverseImpactReport = DependencyGraphAnalyzer.analyzeReverseImpact(
+            for: comp.name,
+            in: project,
+            podspecs: componentPodspecs
+        )
+    }
+
+    func cascadeSyncSelectedComponentVersion() {
+        guard let project, let comp = selectedComponentInfo else { return }
+        let targetVer = editingComponentVersion.isEmpty ? comp.version : editingComponentVersion
+        do {
+            let updated = try DependencyGraphAnalyzer.cascadeSyncVersion(
+                targetComponent: comp.name,
+                newVersion: targetVer,
+                in: project,
+                podspecs: componentPodspecs
+            )
+            refreshProject()
+            alertMessage = "已级联同步更新版本 \(targetVer) 至 \(updated.count) 个依赖方：\(updated.joined(separator: ", "))"
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func createNewModule(options: ModuleScaffoldOptions) {
+        guard let root = project?.rootURL else {
+            alertMessage = "请先选择工程根目录"
+            return
+        }
+        do {
+            _ = try ModuleScaffoldGenerator.generate(options: options, at: root)
+            inspectProject(root, navigateToOverview: false)
+            focusComponent(options.name)
+            alertMessage = "已成功创建组件：\(options.name)"
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func runComponentUnitTest() {
+        guard let info = selectedComponentInfo, let exampleDir = info.exampleDirectoryURL else {
+            alertMessage = "当前组件未包含 Example 工程"
+            return
+        }
+        guard let wsOrProj = WorkspaceOpener.findXcodeWorkspaceOrProject(in: exampleDir) else {
+            alertMessage = "在 Example 目录下未找到 .xcworkspace 或 .xcodeproj"
+            return
+        }
+        let scheme = "\(info.name)_Example"
+        run([BinCommandBuilder.testComponent(workspaceOrProjectURL: wsOrProj, scheme: scheme)], in: exampleDir, logDestination: .componentWindow)
+    }
+
+    func exportCurrentConfigTable(to fileURL: URL) {
+        guard let table = configTable else { return }
+        do {
+            try ComponentConfigTable.exportTable(table, to: fileURL)
+            alertMessage = "配置表快照已成功导出到：\(fileURL.lastPathComponent)"
+        } catch {
+            alertMessage = "导出配置表失败：\(error.localizedDescription)"
+        }
+    }
+
+    func importConfigTable(from fileURL: URL) {
+        guard let appDir = requireAppDirectory() else { return }
+        do {
+            let imported = try ComponentConfigTable.importTable(from: fileURL)
+            configTable = imported
+            try imported.write(to: appDir)
+            reloadAppDirectoryState()
+            alertMessage = "已成功导入配置表：\(fileURL.lastPathComponent)"
+        } catch {
+            alertMessage = "导入配置表失败：\(error.localizedDescription)"
+        }
+    }
+
+    func pushPolicyToServer() {
+        guard let table = configTable, let appDir = requireAppDirectory() else { return }
+        let projectKey = managedProjectKey.isEmpty ? appDir.lastPathComponent : managedProjectKey
+        let target = ManagedTarget(
+            name: appDir.lastPathComponent,
+            dependencies: table.components.filter(\.enabled).map {
+                ManagedDependency(name: $0.name, version: $0.version ?? "0.1.0", mode: $0.mode == "source" ? "source" : "binary")
+            }
+        )
+        Task {
+            do {
+                let policy = try await binaryServerClient.pushPolicy(
+                    address: binaryServerAddress,
+                    project: projectKey,
+                    targets: [target]
+                )
+                managedPolicyRevision = policy.revision
+                managedPolicy = policy
+                alertMessage = "成功推送平台策略！版本 Revision: \(policy.revision)"
+            } catch {
+                alertMessage = "推送策略失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func pullPolicyFromServer(revision: String) {
+        let rev = revision.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rev.isEmpty, let appDir = requireAppDirectory() else { return }
+        let projectKey = managedProjectKey.isEmpty ? appDir.lastPathComponent : managedProjectKey
+        Task {
+            do {
+                let policy = try await binaryServerClient.fetchPolicyRevision(
+                    address: binaryServerAddress,
+                    project: projectKey,
+                    revision: rev
+                )
+                managedPolicy = policy
+                managedPolicyRevision = policy.revision
+                if var table = configTable {
+                    let map = Dictionary(uniqueKeysWithValues: (policy.targets.first?.dependencies ?? []).map { ($0.name, $0) })
+                    for idx in table.components.indices {
+                        if let dep = map[table.components[idx].name] {
+                            table.components[idx].version = dep.version
+                            table.components[idx].mode = dep.mode
+                        }
+                    }
+                    configTable = table
+                    _ = saveConfigTable()
+                }
+                alertMessage = "成功拉取服务端策略 \(rev) 并应用到本地配置表！"
+            } catch {
+                alertMessage = "拉取策略失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func updateConfigEntryBranch(_ componentName: String, git: String?, branch: String?) {
+        guard var table = configTable,
+              let idx = table.components.firstIndex(where: { $0.name == componentName }) else { return }
+        table.components[idx].mode = "branch"
+        if let git { table.components[idx].git = git.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if let branch { table.components[idx].branch = branch.trimmingCharacters(in: .whitespacesAndNewlines) }
+        configTable = table
+        _ = saveConfigTable()
+    }
+
+    func updateComponentExampleEntryBranch(_ componentName: String, git: String?, branch: String?) {
+        guard var table = componentConfigTable,
+              let idx = table.components.firstIndex(where: { $0.name == componentName }) else { return }
+        table.components[idx].mode = "branch"
+        if let git { table.components[idx].git = git.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if let branch { table.components[idx].branch = branch.trimmingCharacters(in: .whitespacesAndNewlines) }
+        componentConfigTable = table
+        _ = saveComponentExampleConfigTable()
+    }
+
     func applyComponentVersionUpdate() {
         guard let info = selectedComponentInfo else {
             alertMessage = "请先选择一个组件 podspec"
@@ -747,6 +1146,8 @@ final class AppModel: ObservableObject {
             return
         }
         let workingDir = podspec.standardizedFileURL.deletingLastPathComponent()
+        let currentVer = editingComponentVersion.isEmpty ? (selectedComponentInfo?.version ?? "") : editingComponentVersion
+        let isPrerelease = currentVer.contains("-") || currentVer.localizedCaseInsensitiveContains("beta")
         let command = BinCommandBuilder.publish(
             podspecURL: podspec,
             environment: environment,
@@ -755,7 +1156,8 @@ final class AppModel: ObservableObject {
             keepIntermediates: keepIntermediates,
             skipTag: skipTag,
             skipCodeSpec: skipCodeSpec,
-            dryRun: dryRun
+            dryRun: dryRun,
+            allowPrerelease: isPrerelease
         )
         run(
             [command],
@@ -877,6 +1279,7 @@ final class AppModel: ObservableObject {
             }
             executionTask = nil
             refreshProject()
+            refreshLatestArtifactReport()
             if refreshBinaryServerOnCompletion && finalExitCode == 0 {
                 refreshBinaryServer()
             }

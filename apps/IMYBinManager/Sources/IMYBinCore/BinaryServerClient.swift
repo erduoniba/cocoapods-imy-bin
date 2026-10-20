@@ -94,4 +94,116 @@ public struct BinaryServerClient: Sendable {
         }
         return try Self.decodeComponents(from: data)
     }
+
+    public static func policyURL(from address: String, project: String, subpath: String? = nil) throws -> URL {
+        let base = try frameworksURL(from: address).deletingLastPathComponent()
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            throw BinaryServerClientError.invalidAddress
+        }
+        let cleanPath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let prefix = cleanPath.isEmpty ? "" : "/\(cleanPath)"
+        if let subpath, !subpath.isEmpty {
+            components.path = "\(prefix)/api/v1/projects/\(project)/policies/\(subpath)"
+        } else {
+            components.path = "\(prefix)/api/v1/projects/\(project)/policies"
+        }
+        guard let url = components.url else {
+            throw BinaryServerClientError.invalidAddress
+        }
+        return url
+    }
+
+    public func fetchActivePolicy(address: String, project: String, token: String? = nil) async throws -> ManagedPolicySnapshot {
+        let url = try Self.policyURL(from: address, project: project, subpath: "active")
+        return try await fetchPolicy(from: url, token: token)
+    }
+
+    public func fetchPolicyRevision(address: String, project: String, revision: String, token: String? = nil) async throws -> ManagedPolicySnapshot {
+        let url = try Self.policyURL(from: address, project: project, subpath: revision)
+        return try await fetchPolicy(from: url, token: token)
+    }
+
+    public func pushPolicy(
+        address: String,
+        project: String,
+        targets: [ManagedTarget],
+        token: String? = nil
+    ) async throws -> ManagedPolicySnapshot {
+        let url = try Self.policyURL(from: address, project: project, subpath: nil)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        struct PolicyPayload: Encodable {
+            let targets: [ManagedTarget]
+        }
+        request.httpBody = try JSONEncoder().encode(PolicyPayload(targets: targets))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BinaryServerClientError.unexpectedResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data.prefix(500), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BinaryServerClientError.httpStatus(httpResponse.statusCode, message)
+        }
+        return try JSONDecoder().decode(ManagedPolicySnapshot.self, from: data)
+    }
+
+    public func activatePolicy(
+        address: String,
+        project: String,
+        revision: String,
+        expectedRevision: String? = nil,
+        token: String? = nil
+    ) async throws {
+        let url = try Self.policyURL(from: address, project: project, subpath: "activate")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        struct ActivatePayload: Encodable {
+            let revision: String
+            let expectedRevision: String?
+        }
+        request.httpBody = try JSONEncoder().encode(ActivatePayload(revision: revision, expectedRevision: expectedRevision))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BinaryServerClientError.unexpectedResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data.prefix(500), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BinaryServerClientError.httpStatus(httpResponse.statusCode, message)
+        }
+    }
+
+    private func fetchPolicy(from url: URL, token: String?) async throws -> ManagedPolicySnapshot {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BinaryServerClientError.unexpectedResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data.prefix(500), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BinaryServerClientError.httpStatus(httpResponse.statusCode, message)
+        }
+        return try JSONDecoder().decode(ManagedPolicySnapshot.self, from: data)
+    }
 }

@@ -39,7 +39,7 @@ module Pod
         set_internal_hash_value(CONFIGURATION_ENV, env)
       end
 
-      # 声明一个同时支持版本化依赖（source/binary）与本地路径开发（local）的组件。
+      # 声明一个同时支持版本化依赖（source/binary）与本地路径开发（local）或远端分支（branch）的组件。
       # 例如：imy_pod 'HDStaticPod', '0.1.11', :path => '../HDStaticPod'
       def imy_pod(name, *requirements)
         valid_bin_plugin
@@ -47,6 +47,10 @@ module Pod
 
         options = requirements.last.is_a?(Hash) ? requirements.pop.dup : {}
         local_path = options.delete(:path) || options.delete('path')
+        git_url = options.delete(:git) || options.delete('git')
+        git_branch = options.delete(:branch) || options.delete('branch')
+        git_tag = options.delete(:tag) || options.delete('tag')
+        git_commit = options.delete(:commit) || options.delete('commit')
         version = requirements.first
         root_name = Specification.root_name(name)
 
@@ -55,13 +59,21 @@ module Pod
 
           version = config_entry['version'] if config_entry['version'] && !config_entry['version'].empty?
           local_path = config_entry['path'] if config_entry['path'] && !config_entry['path'].empty?
+          git_url = config_entry['git'] if config_entry['git'] && !config_entry['git'].empty?
+          git_branch = config_entry['branch'] if config_entry['branch'] && !config_entry['branch'].empty?
+          git_tag = config_entry['tag'] if config_entry['tag'] && !config_entry['tag'].empty?
+          git_commit = config_entry['commit'] if config_entry['commit'] && !config_entry['commit'].empty?
           component_config_modes[root_name] = config_entry['mode'] if config_entry['mode']
         end
 
         imy_pod_definitions[root_name] = {
           'name' => root_name,
           'version' => version&.to_s,
-          'path' => local_path&.to_s
+          'path' => local_path&.to_s,
+          'git' => git_url&.to_s,
+          'branch' => git_branch&.to_s,
+          'tag' => git_tag&.to_s,
+          'commit' => git_commit&.to_s
         }
 
         mode = binary_mode_overrides[root_name] || component_config_modes[root_name] || ENV['IMY_POD_MODE']
@@ -69,6 +81,16 @@ module Pod
           raise Informative, "#{root_name} 未声明本地 :path，无法使用 local 模式." if local_path.to_s.empty?
 
           pod(name, options.merge(:path => local_path))
+        elsif mode == 'branch'
+          branch_options = options.dup
+          branch_options[:git] = git_url if git_url && !git_url.empty?
+          branch_options[:branch] = git_branch if git_branch && !git_branch.empty?
+          branch_options[:tag] = git_tag if git_tag && !git_tag.empty?
+          branch_options[:commit] = git_commit if git_commit && !git_commit.empty?
+          if branch_options[:git].nil? && branch_options[:branch].nil? && branch_options[:tag].nil? && branch_options[:commit].nil?
+            raise Informative, "#{root_name} 为 branch 模式，但未配置 git 或 branch/tag."
+          end
+          pod(name, branch_options)
         else
           args = []
           args << version if version && !version.to_s.empty?
@@ -79,21 +101,36 @@ module Pod
       end
 
       # 从配置表（.imy-bin-config.json，若未生成则从工作区组件推导）加载全部组件依赖，保持 Podfile 零修改、无冲突。
-      def imy_bin_config_dependencies
+      # 支持可选 target_name 参数（如 imy_bin_config_dependencies 'HDImyBinApp'），与组件项的 targets 字段联动。
+      def imy_bin_config_dependencies(target_name = nil)
         valid_bin_plugin
         root = defined_in_file ? defined_in_file.dirname : Pod::Config.instance.installation_root
         default_mode = use_binaries? ? 'binary' : 'source'
         config = CBin::ComponentConfig.load_or_bootstrap(root, default_mode: default_mode)
+        current_target = target_name || (current_target_definition.name rescue nil)
         config['components'].each do |entry|
           next if entry['enabled'] == false
+          if current_target && entry['targets'].is_a?(Array) && !entry['targets'].empty?
+            next unless entry['targets'].include?(current_target)
+          end
 
           name = entry['name']
           version = entry['version']
           local_path = entry['path']
+          git_url = entry['git']
+          branch = entry['branch']
+          tag = entry['tag']
+          commit = entry['commit']
           component_config_modes[name] = entry['mode'] if entry['mode']
           args = []
           args << version if version && !version.empty?
-          args << { :path => local_path } if local_path && !local_path.empty?
+          options = {}
+          options[:path] = local_path if local_path && !local_path.empty?
+          options[:git] = git_url if git_url && !git_url.empty?
+          options[:branch] = branch if branch && !branch.empty?
+          options[:tag] = tag if tag && !tag.empty?
+          options[:commit] = commit if commit && !commit.empty?
+          args << options unless options.empty?
           imy_pod(name, *args)
         end
       end

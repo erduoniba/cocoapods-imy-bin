@@ -141,6 +141,44 @@ module Pod
         stat['declared_version'].should == '0.1.11'
         stat['mode'].should == 'local'
       end
+
+      it 'supports branch mode and target filtering via imy_bin_config_dependencies' do
+        root = Dir.mktmpdir
+        podfile_path = File.join(root, 'Podfile')
+        File.write(podfile_path, <<~RUBY)
+          plugin 'cocoapods-imy-bin'
+          use_binaries!
+          target 'AppMain' do
+            imy_bin_config_dependencies 'AppMain'
+          end
+          target 'AppClip' do
+            imy_bin_config_dependencies 'AppClip'
+          end
+        RUBY
+        CBin::ComponentConfig.write(root, {
+          'version' => 1,
+          'project' => 'Demo',
+          'environment' => 'dev',
+          'defaultMode' => 'binary',
+          'components' => [
+            { 'name' => 'HDDynamicPod', 'mode' => 'branch', 'git' => 'https://example.com/dyn.git', 'branch' => 'feat/test', 'enabled' => true, 'targets' => ['AppMain'] },
+            { 'name' => 'HDStaticPod', 'version' => '0.1.11', 'mode' => 'binary', 'enabled' => true, 'targets' => ['AppClip'] }
+          ]
+        })
+        Config.instance.stubs(:installation_root).returns(Pathname(root))
+        podfile = Podfile.from_file(podfile_path)
+        Config.instance.stubs(:podfile).returns(podfile)
+
+        app_main_target = podfile.target_definitions['AppMain']
+        app_clip_target = podfile.target_definitions['AppClip']
+
+        app_main_target.dependencies.map(&:name).should == ['HDDynamicPod']
+        app_clip_target.dependencies.map(&:name).should == ['HDStaticPod']
+
+        dyn_dep = app_main_target.dependencies.first
+        dyn_dep.external_source[:git].should == 'https://example.com/dyn.git'
+        dyn_dep.external_source[:branch].should == 'feat/test'
+      end
     end
   end
 end

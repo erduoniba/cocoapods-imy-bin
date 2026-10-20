@@ -116,7 +116,8 @@ public enum BinCommandBuilder {
         keepIntermediates: Bool = false,
         skipTag: Bool = false,
         skipCodeSpec: Bool = false,
-        dryRun: Bool = false
+        dryRun: Bool = false,
+        allowPrerelease: Bool = false
     ) -> CommandSpec {
         var arguments = [
             "bin",
@@ -140,12 +141,65 @@ public enum BinCommandBuilder {
         if dryRun {
             arguments.append("--dry-run")
         }
+        if allowPrerelease {
+            arguments.append("--allow-prerelease")
+        }
         return CommandSpec(
             executableName: "pod",
             arguments: arguments,
             title: dryRun ? "发布预检（dry-run）" : "发布组件",
             mutatesProject: false,
             taskKind: .publish
+        )
+    }
+
+    public static func repoUpdate(name: String? = nil, all: Bool = false) -> CommandSpec {
+        var arguments = ["bin", "repo", "update"]
+        if all {
+            arguments.append("--all")
+        } else if let name, !name.isEmpty {
+            arguments.append(name)
+        }
+        return CommandSpec(
+            executableName: "pod",
+            arguments: arguments,
+            title: "更新私有 Spec 仓库",
+            mutatesProject: false,
+            taskKind: .inspect
+        )
+    }
+
+    public static func cleanCocoaPodsCache() -> CommandSpec {
+        CommandSpec(
+            executableName: "pod",
+            arguments: ["cache", "clean", "--all"],
+            title: "清理全量 CocoaPods 缓存",
+            mutatesProject: false,
+            taskKind: .custom
+        )
+    }
+
+    public static func testComponent(
+        workspaceOrProjectURL: URL,
+        scheme: String,
+        destination: String = "platform=iOS Simulator,name=iPhone 16"
+    ) -> CommandSpec {
+        let isWorkspace = workspaceOrProjectURL.pathExtension == "xcworkspace"
+        let flag = isWorkspace ? "-workspace" : "-project"
+        return CommandSpec(
+            executableName: "xcodebuild",
+            arguments: [
+                "test",
+                flag,
+                workspaceOrProjectURL.path,
+                "-scheme",
+                scheme,
+                "-destination",
+                destination,
+            ],
+            title: "运行单元测试: \(scheme)",
+            mutatesProject: false,
+            taskKind: .custom
         )
     }
 

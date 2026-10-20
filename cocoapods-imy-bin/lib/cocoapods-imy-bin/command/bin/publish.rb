@@ -21,7 +21,8 @@ module Pod
             ['--no-clean', '保留构建工程以供排查'],
             ['--dry-run', '只执行预检与本地归档构建，不打 Tag、不上传制品或推送 spec'],
             ['--skip-tag', '跳过创建组件 Git Tag'],
-            ['--skip-code-spec', '跳过推送源码 podspec 到源码 spec 仓库']
+            ['--skip-code-spec', '跳过推送源码 podspec 到源码 spec 仓库'],
+            ['--allow-prerelease', '允许发布 pre-release 版本（例如 beta）']
           ].concat(super)
         end
 
@@ -35,6 +36,7 @@ module Pod
           @dry_run = argv.flag?('dry-run', false)
           @skip_tag = argv.flag?('skip-tag', false)
           @skip_code_spec = argv.flag?('skip-code-spec', false)
+          @allow_prerelease = argv.flag?('allow-prerelease', false)
           @created_tag = false
           CBin.config.set_configuration_env(@env)
           super
@@ -134,6 +136,7 @@ module Pod
             '--allow-warnings',
             '--code-dependencies'
           ]
+          argvs << '--allow-prerelease' if @allow_prerelease || (@spec.version.prerelease? rescue false)
           push = Pod::Command::Bin::Repo::Push.new(CLAide::ARGV.new(argvs))
           push.validate!
           push.run

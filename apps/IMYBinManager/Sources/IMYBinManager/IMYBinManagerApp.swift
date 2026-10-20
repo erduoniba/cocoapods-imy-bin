@@ -38,5 +38,53 @@ struct IMYBinManagerApp: App {
                 .frame(minWidth: 980, minHeight: 680)
         }
         .windowStyle(.titleBar)
+
+        MenuBarExtra("IMY Bin", systemImage: model.isRunning ? "arrow.triangle.2.circlepath.circle.fill" : "shippingbox") {
+            VStack(alignment: .leading, spacing: 4) {
+                if let project = model.project {
+                    Text("工程: \(project.rootURL.lastPathComponent)")
+                        .font(.headline)
+                } else {
+                    Text("未打开工程")
+                        .foregroundStyle(.secondary)
+                }
+
+                if model.isRunning {
+                    Text("执行中: \(model.activeCommandTitle ?? "")")
+                        .foregroundStyle(.orange)
+                } else {
+                    Text("状态: 空闲就绪")
+                        .foregroundStyle(.secondary)
+                }
+
+                Divider()
+
+                Button("打开 App 依赖管理窗口 (⇧⌘1)") {
+                    openWindow(id: "app-manager")
+                }
+
+                Button("打开组件管理与发布窗口 (⇧⌘2)") {
+                    openWindow(id: "component-manager")
+                }
+
+                Divider()
+
+                Button("用 Xcode 打开工程") {
+                    model.openHostAppInXcode()
+                }
+                .disabled(model.project == nil)
+
+                Button("在终端中打开工程") {
+                    model.openHostAppInTerminal()
+                }
+                .disabled(model.project == nil)
+
+                Divider()
+
+                Button("退出 IMY Bin") {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+        }
     }
 }

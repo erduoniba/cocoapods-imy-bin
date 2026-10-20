@@ -42,6 +42,12 @@ module CBin
         mode = (entry['mode'] || payload['defaultMode'] || 'binary').to_s.strip
         version = entry['version']&.to_s&.strip
         local_path = entry['path']&.to_s&.strip
+        git_url = entry['git']&.to_s&.strip
+        branch = entry['branch']&.to_s&.strip
+        tag = entry['tag']&.to_s&.strip
+        commit = entry['commit']&.to_s&.strip
+        targets = entry['targets']
+        targets = targets.map { |t| t.to_s.strip }.reject(&:empty?) if targets.is_a?(Array)
         enabled = entry.key?('enabled') ? !!entry['enabled'] : true
 
         unless CBin::PodModes.valid_name?(name) && CBin::PodModes::MODES.include?(mode)
@@ -51,6 +57,9 @@ module CBin
         if enabled && mode == 'local' && local_path.to_s.empty?
           raise Pod::Informative, "配置表 #{filename} 中组件 #{name} 为 local 模式，但未配置本地 path."
         end
+        if enabled && mode == 'branch' && git_url.to_s.empty? && branch.to_s.empty? && tag.to_s.empty? && commit.to_s.empty?
+          raise Pod::Informative, "配置表 #{filename} 中组件 #{name} 为 branch 模式，但未配置 git 或 branch/tag."
+        end
 
         seen << name
         {
@@ -58,6 +67,11 @@ module CBin
           'version' => (version && !version.empty?) ? version : nil,
           'mode' => mode,
           'path' => (local_path && !local_path.empty?) ? local_path : nil,
+          'git' => (git_url && !git_url.empty?) ? git_url : nil,
+          'branch' => (branch && !branch.empty?) ? branch : nil,
+          'tag' => (tag && !tag.empty?) ? tag : nil,
+          'commit' => (commit && !commit.empty?) ? commit : nil,
+          'targets' => (targets && !targets.empty?) ? targets : nil,
           'enabled' => enabled
         }.compact
       end

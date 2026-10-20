@@ -58,13 +58,27 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
             if let project = model.project {
-                Text(project.rootURL.lastPathComponent)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(project.rootURL.path)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(project.rootURL.lastPathComponent)
+                            .font(.headline)
+                            .lineLimit(1)
+                        Text(project.rootURL.path)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Button {
+                        model.toggleWorkspaceFavorite(project.rootURL)
+                    } label: {
+                        Image(systemName: model.favoriteWorkspaces.contains(where: { $0.url.path == project.rootURL.path }) ? "star.fill" : "star")
+                            .foregroundStyle(.yellow)
+                    }
+                    .buttonStyle(.plain)
+                    .help("收藏此工程")
+                }
+
                 HStack(spacing: 8) {
                     Label("\(model.hostAppDirectories.count) 个宿主 App", systemImage: "app.badge")
                     Spacer()
@@ -72,10 +86,58 @@ struct ContentView: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+
+                HStack(spacing: 6) {
+                    Button {
+                        model.openHostAppInXcode()
+                    } label: {
+                        Label("Xcode", systemImage: "hammer.fill")
+                    }
+                    .controlSize(.small)
+
+                    Button {
+                        model.showHostAppInFinder()
+                    } label: {
+                        Label("Finder", systemImage: "folder")
+                    }
+                    .controlSize(.small)
+
+                    Button {
+                        model.openHostAppInTerminal()
+                    } label: {
+                        Label("终端", systemImage: "terminal")
+                    }
+                    .controlSize(.small)
+                }
             } else {
                 Text("尚未选择工作区或 App 工程")
                     .foregroundStyle(.secondary)
             }
+
+            if !model.recentWorkspaces.isEmpty {
+                Menu {
+                    if !model.favoriteWorkspaces.isEmpty {
+                        Section("收藏工程") {
+                            ForEach(model.favoriteWorkspaces) { item in
+                                Button("★ \(item.name) (\(item.kind.title))") {
+                                    model.inspectProject(item.url, navigateToOverview: true)
+                                }
+                            }
+                        }
+                    }
+                    Section("最近打开") {
+                        ForEach(model.recentWorkspaces) { item in
+                            Button("\(item.name) (\(item.kind.title))") {
+                                model.inspectProject(item.url, navigateToOverview: true)
+                            }
+                        }
+                    }
+                } label: {
+                    Label("最近工程 (\(model.recentWorkspaces.count))", systemImage: "clock")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+
             Button("选择工作区 / App 工程…") { model.selectProject() }
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity)
@@ -144,13 +206,27 @@ struct ComponentWorkspaceView: View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
             if let info = model.selectedComponentInfo {
-                Text("\(info.name) (v\(info.version))")
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(info.repositoryURL.path)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(info.name) (v\(info.version))")
+                            .font(.headline)
+                            .lineLimit(1)
+                        Text(info.repositoryURL.path)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Button {
+                        model.toggleWorkspaceFavorite(info.repositoryURL)
+                    } label: {
+                        Image(systemName: model.favoriteWorkspaces.contains(where: { $0.url.path == info.repositoryURL.path }) ? "star.fill" : "star")
+                            .foregroundStyle(.yellow)
+                    }
+                    .buttonStyle(.plain)
+                    .help("收藏此组件")
+                }
+
                 HStack(spacing: 8) {
                     Label("\(info.dependencies.count) 个 podspec 依赖", systemImage: "link")
                     Spacer()
@@ -158,10 +234,58 @@ struct ComponentWorkspaceView: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+
+                HStack(spacing: 6) {
+                    Button {
+                        model.openComponentInXcode()
+                    } label: {
+                        Label("Xcode", systemImage: "hammer.fill")
+                    }
+                    .controlSize(.small)
+
+                    Button {
+                        model.showComponentInFinder()
+                    } label: {
+                        Label("Finder", systemImage: "folder")
+                    }
+                    .controlSize(.small)
+
+                    Button {
+                        model.openComponentInTerminal()
+                    } label: {
+                        Label("终端", systemImage: "terminal")
+                    }
+                    .controlSize(.small)
+                }
             } else {
                 Text("尚未选择组件工程")
                     .foregroundStyle(.secondary)
             }
+
+            if !model.recentWorkspaces.isEmpty {
+                Menu {
+                    if !model.favoriteWorkspaces.isEmpty {
+                        Section("收藏工程") {
+                            ForEach(model.favoriteWorkspaces) { item in
+                                Button("★ \(item.name) (\(item.kind.title))") {
+                                    model.inspectProject(item.url, navigateToOverview: false)
+                                }
+                            }
+                        }
+                    }
+                    Section("最近打开") {
+                        ForEach(model.recentWorkspaces) { item in
+                            Button("\(item.name) (\(item.kind.title))") {
+                                model.inspectProject(item.url, navigateToOverview: false)
+                            }
+                        }
+                    }
+                } label: {
+                    Label("最近工程 (\(model.recentWorkspaces.count))", systemImage: "clock")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+
             Button("选择工作区 / 组件目录…") { model.selectProject() }
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity)
@@ -181,15 +305,25 @@ struct ComponentWorkspaceView: View {
 
 private struct ComponentDependenciesView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var isShowingScaffoldWizard = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("组件自身依赖管理")
-                        .font(.largeTitle.bold())
-                    Text("管理组件在 .podspec 中对外声明的 s.dependency，以及组件 Example 调试工程的依赖配置表（.imy-bin-config.json）与安装。")
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("组件自身依赖管理")
+                            .font(.largeTitle.bold())
+                        Text("管理组件在 .podspec 中对外声明的 s.dependency，以及组件 Example 调试工程的依赖配置表与反向依赖分析。")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        isShowingScaffoldWizard = true
+                    } label: {
+                        Label("新建组件…", systemImage: "plus.square.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
 
                 ComponentSelectorCard()
@@ -294,16 +428,38 @@ private struct ComponentDependenciesView: View {
                                         Button("全部源码 (source)") { model.switchAllComponentExampleDeps(to: "source") }
                                         Button("全部二进制 (binary)") { model.switchAllComponentExampleDeps(to: "binary") }
                                     }
+
+                                    HStack(spacing: 12) {
+                                        TextField("搜索 Example 组件…", text: $model.compSearchText)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(maxWidth: 200)
+
+                                        Picker("模式过滤", selection: $model.compModeFilter) {
+                                            Text("全部模式").tag("all")
+                                            Text("仅 local").tag("local")
+                                            Text("仅 source").tag("source")
+                                            Text("仅 binary").tag("binary")
+                                            Text("仅 branch").tag("branch")
+                                            Text("仅未发布二进制").tag("unreleased")
+                                        }
+                                        .frame(width: 150)
+                                    }
+
                                     Divider()
-                                    ForEach(entries) { entry in
-                                        ComponentExampleDepRowView(
-                                            entry: entry,
-                                            isDeclaredInPodspec: info.dependencies.contains {
-                                                ($0.name.split(separator: "/").first.map(String.init) ?? $0.name) == entry.name
+                                    let filtered = model.filteredComponentExampleEntries
+                                    if filtered.isEmpty {
+                                        EmptyHint(text: "没有匹配搜索或筛选条件的 Example 依赖组件。")
+                                    } else {
+                                        ForEach(filtered) { entry in
+                                            ComponentExampleDepRowView(
+                                                entry: entry,
+                                                isDeclaredInPodspec: info.dependencies.contains {
+                                                    ($0.name.split(separator: "/").first.map(String.init) ?? $0.name) == entry.name
+                                                }
+                                            )
+                                            if entry.id != filtered.last?.id {
+                                                Divider()
                                             }
-                                        )
-                                        if entry.id != entries.last?.id {
-                                            Divider()
                                         }
                                     }
                                 } else {
@@ -315,11 +471,74 @@ private struct ComponentDependenciesView: View {
                         }
                         .padding(.top, 6)
                     }
+
+                    GroupBox("3. 反向影响分析（谁依赖了我 / Who Depends On Me）") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("扫描工作区内所有上层组件的 .podspec 与宿主 App 配置表，展示直接依赖当前组件的模块列表。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if let report = model.reverseImpactReport, report.totalCount > 0 {
+                                HStack {
+                                    Label("\(report.dependentComponents.count) 个上层组件，\(report.dependentApps.count) 个宿主 App 依赖本组件", systemImage: "network")
+                                        .font(.subheadline.bold())
+                                    Spacer()
+                                    Button("级联更新新版本到所有依赖方 (\(info.version))") {
+                                        model.cascadeSyncSelectedComponentVersion()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                }
+
+                                Divider()
+
+                                if !report.dependentComponents.isEmpty {
+                                    Text("依赖本组件的上层组件：").font(.caption.bold()).foregroundStyle(.secondary)
+                                    ForEach(report.dependentComponents) { dep in
+                                        HStack {
+                                            Label(dep.name, systemImage: "shippingbox")
+                                                .font(.headline)
+                                            Spacer()
+                                            Text("约束: \(dep.currentRequirement ?? "未限制")")
+                                                .font(.caption.monospaced())
+                                                .foregroundStyle(.secondary)
+                                            Button("查看组件") {
+                                                model.focusComponent(dep.name, tab: .dependencies)
+                                            }
+                                            .controlSize(.small)
+                                        }
+                                    }
+                                }
+
+                                if !report.dependentApps.isEmpty {
+                                    Divider()
+                                    Text("依赖本组件的宿主 App：").font(.caption.bold()).foregroundStyle(.secondary)
+                                    ForEach(report.dependentApps) { app in
+                                        HStack {
+                                            Label(app.name, systemImage: "app.badge")
+                                                .font(.headline)
+                                            Spacer()
+                                            Text("版本: \(app.currentRequirement ?? "未锁定")")
+                                                .font(.caption.monospaced())
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                            } else {
+                                EmptyHint(text: "工作区内暂无其他组件或 App 声明依赖 \(info.name)。")
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
                 }
             }
             .padding(24)
         }
         .disabled(model.project == nil || model.isRunning)
+        .sheet(isPresented: $isShowingScaffoldWizard) {
+            ModuleScaffoldWizardView()
+                .environmentObject(model)
+        }
     }
 
     private func availableDependencyCandidates(excluding selfName: String) -> [(name: String, version: String)] {
@@ -382,6 +601,11 @@ private struct ComponentExampleDepRowView: View {
     let entry: ComponentConfigEntry
     let isDeclaredInPodspec: Bool
     @State private var versionDraft: String = ""
+    @State private var isEditingBranch: Bool = false
+    @State private var gitURLDraft: String = ""
+    @State private var branchDraft: String = ""
+    @State private var remoteBranches: [String] = []
+    @State private var isFetchingBranches: Bool = false
 
     var body: some View {
         let localInfo = model.localPodspecInfo(named: entry.name)
@@ -445,7 +669,11 @@ private struct ComponentExampleDepRowView: View {
                         .controlSize(.mini)
                         .frame(width: 100)
                     }
-                    if let path = entry.path {
+                    if entry.mode == "branch", let b = entry.branch {
+                        Text("分支: \(b)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.purple)
+                    } else if let path = entry.path {
                         Text("path: \(path)")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
@@ -461,6 +689,52 @@ private struct ComponentExampleDepRowView: View {
                 .disabled(entry.mode == "source")
             Button("二进制") { model.switchComponentExampleDepMode(entry.name, to: "binary") }
                 .disabled(entry.mode == "binary")
+
+            Button("远端分支") {
+                gitURLDraft = entry.git ?? localInfo?.sourceGit ?? ""
+                branchDraft = entry.branch ?? ""
+                isEditingBranch = true
+            }
+            .popover(isPresented: $isEditingBranch) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("配置 \(entry.name) 远端分支").font(.headline)
+                    TextField("Git 仓库地址", text: $gitURLDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 320)
+                    HStack {
+                        TextField("分支名称 (如 feat/login)", text: $branchDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 170)
+                        if !remoteBranches.isEmpty {
+                            Menu("选分支") {
+                                ForEach(remoteBranches, id: \.self) { b in
+                                    Button(b) { branchDraft = b }
+                                }
+                            }
+                            .frame(width: 80)
+                        }
+                        Button("拉取远端分支") {
+                            isFetchingBranches = true
+                            Task {
+                                remoteBranches = await model.fetchRemoteBranches(for: gitURLDraft)
+                                isFetchingBranches = false
+                            }
+                        }
+                        .disabled(gitURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    HStack {
+                        Button("取消") { isEditingBranch = false }
+                        Spacer()
+                        Button("切换并保存") {
+                            model.updateComponentExampleEntryBranch(entry.name, git: gitURLDraft, branch: branchDraft)
+                            isEditingBranch = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(branchDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                .padding(16)
+            }
         }
         .padding(.vertical, 4)
         .onAppear {
@@ -588,6 +862,14 @@ private struct ComponentPublishView: View {
                                     }
                                     .controlSize(.small)
                                 }
+                                Button("Beta +1") {
+                                    model.bumpEditingBetaVersion()
+                                }
+                                .controlSize(.small)
+                                Button("转为正式版") {
+                                    model.promoteEditingBetaToRelease()
+                                }
+                                .controlSize(.small)
                             }
 
                             HStack(spacing: 20) {
@@ -611,10 +893,46 @@ private struct ComponentPublishView: View {
 
                             Divider()
 
+                            HStack(spacing: 12) {
+                                Label("当前 Git 分支：\(info.gitBranch ?? "未知")", systemImage: "arrow.triangle.branch")
+                                    .font(.subheadline.bold())
+
+                                if let branchInfo = model.currentGitBranchInfo {
+                                    Menu("切换分支") {
+                                        if !branchInfo.localBranches.isEmpty {
+                                            Section("本地分支") {
+                                                ForEach(branchInfo.localBranches, id: \.self) { branch in
+                                                    Button(branch) {
+                                                        model.checkoutBranch(branch)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if !branchInfo.remoteBranches.isEmpty {
+                                            Section("远端分支") {
+                                                ForEach(branchInfo.remoteBranches, id: \.self) { branch in
+                                                    Button(branch) {
+                                                        model.checkoutBranch(branch)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .controlSize(.small)
+                                }
+
+                                Button("拉取最新 (git pull)") {
+                                    model.pullCurrentBranch()
+                                }
+                                .controlSize(.small)
+                            }
+
+                            Divider()
+
                             VStack(alignment: .leading, spacing: 6) {
                                 StatusRow(
-                                    title: "Git 分支与工作区",
-                                    value: "\(info.gitBranch ?? "未知分支") · " + (info.isGitClean ? "工作区干净（可发布）" : "存在 \(info.dirtyFilesSummary.count) 个未提交文件"),
+                                    title: "Git 工作区状态",
+                                    value: info.isGitClean ? "工作区干净（可发布）" : "存在 \(info.dirtyFilesSummary.count) 个未提交文件",
                                     success: info.isGitClean
                                 )
                                 if !info.isGitClean {
@@ -701,6 +1019,57 @@ private struct ComponentPublishView: View {
                         Button("取消", role: .cancel) {}
                     } message: {
                         Text("组件：\(info.name)\n版本：\(info.version)\n环境：\(model.environment.title) (\(model.configuration.rawValue))\n制品服务：\(model.binaryServerAddress)")
+                    }
+
+                    if let artifact = model.latestArtifactReport {
+                        GroupBox("最新生成的 XCFramework 制品") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Label(artifact.fileURL.lastPathComponent, systemImage: "archivebox.fill")
+                                        .font(.headline)
+                                    Spacer()
+                                    Text("产物体积: \(artifact.formattedSize)")
+                                        .font(.subheadline.bold())
+                                        .foregroundStyle(.blue)
+                                }
+                                HStack {
+                                    Text("SHA-256: \(artifact.sha256)")
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Button("复制校验值") {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(artifact.sha256, forType: .string)
+                                    }
+                                    .controlSize(.mini)
+                                }
+                                Text("文件路径: \(artifact.fileURL.path)")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .padding(.top, 4)
+                        }
+                    }
+
+                    GroupBox("组件单元测试 (xcodebuild test)") {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("在 Example 调试工程中运行单测")
+                                    .font(.headline)
+                                Text("执行 xcodebuild test 运行组件测试用例并在控制台查看通过/失败报告。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("运行单元测试") {
+                                model.runComponentUnitTest()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(info.exampleDirectoryURL == nil)
+                        }
+                        .padding(.top, 4)
                     }
                 }
             }
@@ -885,11 +1254,57 @@ private struct ManagedDependenciesView: View {
                                 Spacer()
                                 Button("重置为默认二进制 (--reset)") { model.resetComponentModes() }
                             }
+
+                            HStack(spacing: 12) {
+                                TextField("搜索组件依赖…", text: $model.appSearchText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(maxWidth: 240)
+
+                                Picker("模式过滤", selection: $model.appModeFilter) {
+                                    Text("全部模式").tag("all")
+                                    Text("仅 local").tag("local")
+                                    Text("仅 source").tag("source")
+                                    Text("仅 binary").tag("binary")
+                                    Text("仅 branch").tag("branch")
+                                    Text("仅未发布二进制").tag("unreleased")
+                                }
+                                .frame(width: 160)
+
+                                Spacer()
+
+                                Button("导出快照…") {
+                                    let panel = NSSavePanel()
+                                    panel.title = "导出配置表快照"
+                                    panel.nameFieldStringValue = "\(model.selectedAppDirectory?.lastPathComponent ?? "app")-config-\(Int(Date().timeIntervalSince1970)).imy-config.json"
+                                    if panel.runModal() == .OK, let url = panel.url {
+                                        model.exportCurrentConfigTable(to: url)
+                                    }
+                                }
+                                .controlSize(.small)
+
+                                Button("导入快照…") {
+                                    let panel = NSOpenPanel()
+                                    panel.title = "选择配置表快照文件"
+                                    panel.allowsMultipleSelection = false
+                                    panel.canChooseDirectories = false
+                                    panel.canChooseFiles = true
+                                    if panel.runModal() == .OK, let url = panel.url {
+                                        model.importConfigTable(from: url)
+                                    }
+                                }
+                                .controlSize(.small)
+                            }
+
                             Divider()
-                            ForEach(entries) { entry in
-                                ComponentConfigRowView(entry: entry)
-                                if entry.id != entries.last?.id {
-                                    Divider()
+                            let filtered = model.filteredConfigEntries
+                            if filtered.isEmpty {
+                                EmptyHint(text: "没有匹配搜索或筛选条件的组件。")
+                            } else {
+                                ForEach(filtered) { entry in
+                                    ComponentConfigRowView(entry: entry)
+                                    if entry.id != filtered.last?.id {
+                                        Divider()
+                                    }
                                 }
                             }
                         } else {
@@ -899,14 +1314,30 @@ private struct ManagedDependenciesView: View {
                     .padding(.top, 6)
                 }
 
-                GroupBox("同步平台策略快照（可选）") {
+                GroupBox("服务端策略快照与云端共享") {
                     VStack(alignment: .leading, spacing: 10) {
-                        TextField("平台工程标识", text: $model.managedProjectKey)
-                        TextField("策略版本 UUID（开发环境可留空使用已启用版本）", text: $model.managedPolicyRevision)
-                        Text("平台令牌从登录 Shell 的 IMY_BIN_PLATFORM_TOKEN 读取，不保存在客户端。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Button("同步策略") { model.runPolicySync() }
+                        HStack {
+                            TextField("平台工程标识", text: $model.managedProjectKey)
+                            Button("推送当前配置到服务端") {
+                                model.pushPolicyToServer()
+                            }
+                            .controlSize(.small)
+                        }
+                        HStack {
+                            TextField("策略版本 Revision", text: $model.managedPolicyRevision)
+                            Button("从服务端拉取并应用") {
+                                model.pullPolicyFromServer(revision: model.managedPolicyRevision)
+                            }
+                            .controlSize(.small)
+                            .disabled(model.managedPolicyRevision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                        HStack {
+                            Button("执行 CLI 策略同步 (pod bin sync)") { model.runPolicySync() }
+                            Spacer()
+                            Text("认证令牌从 IMY_BIN_PLATFORM_TOKEN 环境变量读取。")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                         if let error = model.managedPolicyError {
                             Label(error, systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
@@ -925,6 +1356,11 @@ private struct ComponentConfigRowView: View {
     @Environment(\.openWindow) private var openWindow
     let entry: ComponentConfigEntry
     @State private var versionDraft: String = ""
+    @State private var isEditingBranch: Bool = false
+    @State private var gitURLDraft: String = ""
+    @State private var branchDraft: String = ""
+    @State private var remoteBranches: [String] = []
+    @State private var isFetchingBranches: Bool = false
 
     var body: some View {
         let localInfo = model.localPodspecInfo(named: entry.name)
@@ -987,7 +1423,11 @@ private struct ComponentConfigRowView: View {
                         .controlSize(.mini)
                         .frame(width: 110)
                     }
-                    if let path = entry.path {
+                    if entry.mode == "branch", let b = entry.branch {
+                        Text("分支: \(b)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.purple)
+                    } else if let path = entry.path {
                         Text("path: \(path)")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
@@ -1003,6 +1443,52 @@ private struct ComponentConfigRowView: View {
                 .disabled(entry.mode == "source")
             Button("二进制") { model.switchLocalComponent(entry.name, to: "binary") }
                 .disabled(entry.mode == "binary")
+
+            Button("远端分支") {
+                gitURLDraft = entry.git ?? localInfo?.sourceGit ?? ""
+                branchDraft = entry.branch ?? ""
+                isEditingBranch = true
+            }
+            .popover(isPresented: $isEditingBranch) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("配置 \(entry.name) 远端分支").font(.headline)
+                    TextField("Git 仓库地址", text: $gitURLDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 320)
+                    HStack {
+                        TextField("分支名称 (如 feat/login)", text: $branchDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 170)
+                        if !remoteBranches.isEmpty {
+                            Menu("选分支") {
+                                ForEach(remoteBranches, id: \.self) { b in
+                                    Button(b) { branchDraft = b }
+                                }
+                            }
+                            .frame(width: 80)
+                        }
+                        Button("拉取远端分支") {
+                            isFetchingBranches = true
+                            Task {
+                                remoteBranches = await model.fetchRemoteBranches(for: gitURLDraft)
+                                isFetchingBranches = false
+                            }
+                        }
+                        .disabled(gitURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    HStack {
+                        Button("取消") { isEditingBranch = false }
+                        Spacer()
+                        Button("切换并保存") {
+                            model.updateConfigEntryBranch(entry.name, git: gitURLDraft, branch: branchDraft)
+                            isEditingBranch = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(branchDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                .padding(16)
+            }
 
             if localInfo != nil {
                 Button("组件窗口…") {
@@ -1148,7 +1634,7 @@ private struct LogsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(spacing: 10) {
                 if let task = model.selectedTask {
                     Label("\(task.title) · \(task.state.title)", systemImage: statusImage(for: task.state))
                         .foregroundStyle(statusColor(for: task.state))
@@ -1159,6 +1645,34 @@ private struct LogsView: View {
                     Text("没有任务记录").foregroundStyle(.secondary)
                 }
                 Spacer()
+
+                TextField("搜索日志…", text: $model.logSearchQuery)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 140)
+
+                Picker("过滤", selection: $model.logFilterMode) {
+                    ForEach(LogFilterMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .frame(width: 130)
+
+                Button("复制日志") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(model.log, forType: .string)
+                }
+                .controlSize(.small)
+
+                Button("导出…") {
+                    let panel = NSSavePanel()
+                    panel.title = "导出任务运行日志"
+                    panel.nameFieldStringValue = "task-\(Int(Date().timeIntervalSince1970)).log"
+                    if panel.runModal() == .OK, let url = panel.url {
+                        try? model.log.write(to: url, atomically: true, encoding: .utf8)
+                    }
+                }
+                .controlSize(.small)
+
                 if !model.taskHistory.records.isEmpty {
                     Menu("任务历史") {
                         ForEach(model.taskHistory.records.reversed(), id: \.id) { task in
@@ -1209,9 +1723,75 @@ private struct LogsView: View {
 
 private struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var selectedComponentForClean: String = ""
 
     var body: some View {
         Form {
+            Section("Spec 仓库与缓存维护中心") {
+                HStack(spacing: 12) {
+                    Button("更新二进制 Spec 仓库 (pod bin repo update)") {
+                        model.runRepoUpdate()
+                    }
+                    Button("更新全部 Spec 仓库 (pod repo update)") {
+                        model.runRepoUpdate(all: true)
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("组件缓存清理（清理 Pods 目录与 CocoaPods 本机缓存）").font(.subheadline.bold())
+                    HStack {
+                        let names = model.componentPodspecs.map(\.name)
+                        if !names.isEmpty {
+                            Picker("选择组件", selection: $selectedComponentForClean) {
+                                Text("请选择组件").tag("")
+                                ForEach(names, id: \.self) { name in
+                                    Text(name).tag(name)
+                                }
+                            }
+                            .frame(width: 200)
+
+                            Button("清理组件缓存") {
+                                model.cleanComponentCache(named: selectedComponentForClean)
+                            }
+                            .disabled(selectedComponentForClean.isEmpty)
+                        } else {
+                            Text("未发现可管理的组件。").foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("全局缓存清理与体积统计").font(.subheadline.bold())
+                    HStack(spacing: 16) {
+                        Button("清理 CocoaPods 全量缓存 (pod cache clean --all)") {
+                            model.runCleanCocoaPodsCache()
+                        }
+                    }
+                    HStack {
+                        LabeledContent("Xcode DerivedData 体积", value: CacheManager.formatBytes(model.derivedDataSize))
+                        Button("清理 DerivedData") {
+                            model.cleanDerivedData()
+                        }
+                        .controlSize(.small)
+                    }
+                    HStack {
+                        LabeledContent("tmpRelease 二进制构建缓存", value: CacheManager.formatBytes(model.tmpReleaseSize))
+                        Button("清理 tmpRelease") {
+                            model.cleanTmpRelease()
+                        }
+                        .controlSize(.small)
+                    }
+                    Button("刷新缓存体积统计") {
+                        model.refreshCacheSizes()
+                    }
+                    .controlSize(.small)
+                }
+            }
+
             Section("双窗口架构") {
                 Label("App 依赖工作台 与 组件管理工作台 独立分窗", systemImage: "macwindow.on.rectangle")
                 Text("• App 依赖工作台窗口（⇧⌘1）：管理宿主 App 的 .imy-bin-config.json 配置表与安装。\n• 组件管理与发布工作台窗口（⇧⌘2）：管理组件自身的 podspec s.dependency、组件 Example 调试配置表以及组件版本发布。")
@@ -1232,6 +1812,99 @@ private struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            model.refreshCacheSizes()
+            if let first = model.componentPodspecs.first?.name {
+                selectedComponentForClean = first
+            }
+        }
+    }
+}
+
+private struct ModuleScaffoldWizardView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String = ""
+    @State private var isStaticFramework: Bool = true
+    @State private var deploymentTarget: String = "15.0"
+    @State private var author: String = NSFullUserName()
+    @State private var summary: String = "A modular CocoaPods component built for XCFramework distribution."
+    @State private var errorMessage: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Image(systemName: "plus.square.dashed")
+                        .font(.title)
+                        .foregroundStyle(.tint)
+                    Text("新建 CocoaPods 二进制组件向导")
+                        .font(.title2.bold())
+                }
+                Text("一键生成标准的二进制组件目录架构：包含 podspec 规格、Classes 源码骨架、接入 imy_bin_config_dependencies 的 Example 调试工程及 Git 仓库初始化。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Form {
+                TextField("组件名称（如 HDCommonUI）:", text: $name)
+                    .textFieldStyle(.roundedBorder)
+
+                Picker("组件包架构:", selection: $isStaticFramework) {
+                    Text("静态库 XCFramework (推荐，避免动态库启动开销)").tag(true)
+                    Text("动态库 XCFramework").tag(false)
+                }
+
+                TextField("iOS 部署版本:", text: $deploymentTarget)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("作者名称:", text: $author)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("组件简要描述:", text: $summary)
+                    .textFieldStyle(.roundedBorder)
+            }
+            .formStyle(.grouped)
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Button("取消") {
+                    dismiss()
+                }
+                Spacer()
+                Button("创建组件") {
+                    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else {
+                        errorMessage = "组件名称不能为空"
+                        return
+                    }
+                    guard trimmed.range(of: #"^[A-Za-z][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else {
+                        errorMessage = "组件名称必须以英文字母开头，且只包含字母、数字和下划线"
+                        return
+                    }
+
+                    let options = ModuleScaffoldOptions(
+                        name: trimmed,
+                        isStaticFramework: isStaticFramework,
+                        deploymentTarget: deploymentTarget,
+                        author: author,
+                        summary: summary
+                    )
+                    model.createNewModule(options: options)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 520, height: 420)
     }
 }
 
