@@ -27,6 +27,8 @@ open .build/IMYBinManager.app
 
 生成的 `.app` 使用 ad-hoc 签名，仅用于本地开发。正式分发需配置独立 Bundle ID、Developer ID、Hardened Runtime 和 notarization。
 
+工程依赖页现可读取本地 `.imy-bin-policy.json`，并通过 `pod bin sync`、`pod bin switch` 启动实验性策略同步和个人模式切换；详见 [团队平台第一阶段实现](../../docs/platform-foundation.md)。这不是生产发布界面。
+
 ## 当前限制
 
 - 尚未开放 `pod bin auto`，避免在没有发布预检和二次确认时上传制品。

@@ -5,6 +5,7 @@ require 'cocoapods/command/gen'
 require 'cocoapods/generate'
 require 'cocoapods-imy-bin/helpers/framework_builder'
 require 'cocoapods-imy-bin/helpers/library_builder'
+require 'cocoapods-imy-bin/helpers/xcframework_builder'
 require 'cocoapods-imy-bin/config/config_builder'
 
 module CBin
@@ -35,6 +36,11 @@ module CBin
 
       def build
         UI.section("Building static framework #{@spec}") do
+          # XCFramework 由 Xcode 直接产出完整 framework，不再走 lipo/拷贝头文件流程。
+          if CBin.config.xcframework?
+            build_xcframework unless @skip_archive
+            next
+          end
 
           build_static_framework
           unless @skip_archive
@@ -48,6 +54,13 @@ module CBin
 
         end
 
+      end
+
+      def build_xcframework
+        CBin::XCFrameworkBuilder.new(@spec,
+                                     work_dir: workspace_directory,
+                                     output_dir: zip_dir,
+                                     configuration: @build_model).build
       end
 
       def build_static_framework

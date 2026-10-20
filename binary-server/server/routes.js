@@ -34,8 +34,8 @@ function createRouter({ config, storage }) {
   router.get('/frameworks/:name/:version', frameworks.show)
   router.get('/frameworks/:name', frameworks.show)
   router.get('/frameworks', frameworks.show)
-  router.post('/frameworks', authenticateMutation, upload.single('file'), frameworks.create)
-  router.delete('/frameworks/:name/:version', authenticateMutation, frameworks.destroy)
+  if (!config.platformEnabled) router.post('/frameworks', authenticateMutation, upload.single('file'), frameworks.create)
+  if (!config.platformEnabled) router.delete('/frameworks/:name/:version', authenticateMutation, frameworks.destroy)
 
   return router
 }

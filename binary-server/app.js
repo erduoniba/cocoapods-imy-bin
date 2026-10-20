@@ -6,6 +6,12 @@ const createRouter = require('./server/routes')
 const { errorHandler, securityHeaders } = require('./server/middleware/http')
 const { createStorage } = require('./server/utils/dir')
 const Component = require('./server/models/component')
+const Release = require('./server/models/release')
+const BuildJob = require('./server/models/build_job')
+const Project = require('./server/models/project')
+const ProjectPolicyRevision = require('./server/models/project_policy')
+const AuditEvent = require('./server/models/audit_event')
+const { createPlatformRouter } = require('./server/platform/routes')
 
 function createApp(config = loadConfig()) {
   const app = new Koa()
@@ -18,6 +24,11 @@ function createApp(config = loadConfig()) {
   app.use(securityHeaders)
   app.use(router.routes())
   app.use(router.allowedMethods())
+  if (config.platformEnabled) {
+    const platform = createPlatformRouter({ config, storage })
+    app.use(platform.routes())
+    app.use(platform.allowedMethods())
+  }
   app.on('error', (error, ctx) => {
     console.error(JSON.stringify({
       message: error.message,
@@ -39,6 +50,9 @@ async function start() {
     serverSelectionTimeoutMS: config.mongodbServerSelectionTimeoutMs,
   })
   await Component.init()
+  if (config.platformEnabled) {
+    await Promise.all([Release.init(), BuildJob.init(), Project.init(), ProjectPolicyRevision.init(), AuditEvent.init()])
+  }
 
   const app = createApp(config)
   const server = app.listen(config.port, config.host, () => {

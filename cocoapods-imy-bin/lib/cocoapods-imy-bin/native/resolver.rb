@@ -96,22 +96,14 @@ module Pod
         specs_by_target = old_resolver_specs_by_target.bind(self).call
 
         sources_manager = Config.instance.sources_manager
-        use_source_pods = podfile.use_source_pods
-
+        mode_overrides = podfile.effective_mode_overrides
         missing_binary_specs = []
         specs_by_target.each do |target, rspecs|
-          # use_binaries 并且 use_source_pods 不包含  本地可过滤
-          use_binary_rspecs = if podfile.use_binaries? || podfile.use_binaries_selector
-                                rspecs.select do |rspec|
-                                  ([rspec.name, rspec.root.name] & use_source_pods).empty? &&
-                                    (podfile.use_binaries_selector.nil? || podfile.use_binaries_selector.call(rspec.spec))
-                                end
-                              else
-                                []
-                              end
+          use_binary_rspecs = rspecs.select { |rspec| podfile.use_binary_for_spec?(rspec, mode_overrides) }
 
           # Parallel.map(rspecs, in_threads: 8) do |rspec|
           specs_by_target[target] = rspecs.map do |rspec|
+            mode = mode_overrides[rspec.root.name] unless podfile.local_path_dependency?(rspec.root.name)
             # 含有 subspecs 的组件暂不处理
             # next rspec if rspec.spec.subspec? || rspec.spec.subspecs.any?
 
@@ -139,7 +131,10 @@ module Pod
               end
               # 这里可能出现分析依赖的 source 和切换后的 source 对应 specification 的 subspec 对应不上
               # 造成 subspec_by_name 返回 nil，这个是正常现象
-              next unless specification
+              unless specification
+                raise Pod::Informative, '指定模式的 subspec 不存在.' if mode
+                next
+              end
 
               used_by_only = if Pod.match_version?('~> 1.7')
                                rspec.used_by_non_library_targets_only
@@ -148,7 +143,7 @@ module Pod
                              end
               # used_by_only = rspec.respond_to?(:used_by_tests_only) ? rspec.used_by_tests_only : rspec.used_by_non_library_targets_only
               # 组装新的 rspec ，替换原 rspec
-              if use_binary
+              if use_binary || mode == 'source'
                 rspec = if Pod.match_version?('~> 1.4.0')
                           ResolverSpecification.new(specification, used_by_only)
                         else
@@ -159,6 +154,9 @@ module Pod
               end
 
             rescue Pod::StandardError => e
+              if mode
+                raise Pod::Informative, "#{rspec.root.name} #{spec_version} 的 #{mode} podspec 不可用: #{e.message}"
+              end
               # 没有从新的 source 找到对应版本组件，直接返回原 rspec
 
               # missing_binary_specs << rspec.spec if use_binary

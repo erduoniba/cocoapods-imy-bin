@@ -31,9 +31,10 @@ const ComponentSchema = new Schema({
     required: true,
     min: 1,
   },
+  managedReleaseId: { type: Schema.Types.ObjectId, default: null, ref: 'Release' },
   status: {
     type: String,
-    enum: ['pending', 'ready', 'deleting'],
+    enum: ['pending', 'staged', 'ready', 'deleting'],
     default: 'pending',
   },
 }, {

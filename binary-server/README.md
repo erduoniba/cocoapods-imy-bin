@@ -9,6 +9,8 @@ Binary Server stores component archives for `cocoapods-imy-bin`. It retains the 
 
 `POST /frameworks` and `DELETE /frameworks/:name/:version` are mutating operations. In production they require a `BINARY_SERVER_TOKEN` with either `Authorization: Bearer <token>` or `X-Binary-Server-Token: <token>`.
 
+New experimental `/api/v1` routes are documented in [the platform foundation guide](../docs/platform-foundation.md). They are disabled by default and **cannot be enabled in production** until OIDC and durable artifact storage are implemented.
+
 ## Prerequisites
 
 - Node.js 22 or later

@@ -1,10 +1,8 @@
-const multer = require('@koa/multer')
-
 async function errorHandler(ctx, next) {
   try {
     await next()
   } catch (error) {
-    const isMulterError = error instanceof multer.MulterError
+    const isMulterError = error.name === 'MulterError' && typeof error.code === 'string'
     const status = isMulterError ? 400 : error.status || error.statusCode || 500
     const code = isMulterError ? 'INVALID_UPLOAD' : error.code || 'INTERNAL_ERROR'
     const message = status >= 500 ? 'Internal server error' : error.message

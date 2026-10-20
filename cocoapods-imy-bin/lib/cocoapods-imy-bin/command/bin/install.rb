@@ -37,6 +37,13 @@ module Pod
           gen = Pod::Command::Install.new(CLAide::ARGV.new(argvs))
           gen.validate!
           gen.run
+          if (project = Pod::Config.instance.podfile&.imy_bin_managed_policy_project)
+            CBin::ManagedPolicy.verify_lockfile!(
+              config.installation_root.to_s, project: project,
+              source_repo: CBin.config.code_repo_url, binary_repo: CBin.config.binary_repo_url,
+              mode_overrides: Pod::Config.instance.podfile.effective_mode_overrides
+            )
+          end
         end
       end
     end

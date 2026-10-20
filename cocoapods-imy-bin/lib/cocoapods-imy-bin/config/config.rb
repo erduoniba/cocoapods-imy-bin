@@ -18,10 +18,22 @@ module CBin
           'code_repo_url' => { description: '源码私有源 Git 地址', default: 'git@github.com:su350380433/example_spec_source.git' },
           'binary_repo_url' => { description: '二进制私有源 Git 地址', default: 'git@github.com:su350380433/example_spec_bin_dev.git' },
           'binary_download_url' => { description: '二进制下载地址，内部会依次传入组件名称与版本，替换字符串中的 %s ', default: 'http://localhost:8080/frameworks/%s/%s/zip' },
+          'binary_upload_url' => { description: '二进制服务上传地址（POST /frameworks）；留空时从下载地址推导', default: '' },
           'binary_upload_token' => { description: '二进制服务上传令牌；生产环境优先使用 BINARY_SERVER_TOKEN 环境变量', default: '' },
           # 'binary_type' => { description: '二进制打包类型', default: 'framework', selection: %w[framework library] },
+          'binary_format' => { description: '二进制制品格式：xcframework（真机+模拟器 arm64/x86_64）或旧版 lipo framework', default: 'xcframework', selection: %w[xcframework framework] },
           'download_file_type' => { description: '下载二进制文件类型', default: 'zip', selection: %w[zip tgz tar tbz txz dmg] }
       }
+    end
+
+    # 旧配置文件没有该字段时默认使用 XCFramework。
+    def binary_format
+      value = config.respond_to?(:binary_format) ? config.binary_format.to_s : ''
+      value.empty? ? 'xcframework' : value
+    end
+
+    def xcframework?
+      binary_format == 'xcframework'
     end
 
     def config_file_with_configuration_env(configuration_env)
@@ -55,8 +67,15 @@ module CBin
 
     #上传的url
     def binary_upload_url
-      cut_string = "/%s/%s/zip"
-      binary_download_url[0,binary_download_url.length - cut_string.length]
+      configured = config.binary_upload_url.to_s
+      return configured unless configured.empty?
+
+      download_url = binary_download_url.to_s
+      suffix = '/%s/%s/zip'
+      unless download_url.end_with?(suffix)
+        raise Pod::Informative, '请配置 binary_upload_url，或将 binary_download_url 设为 .../%s/%s/zip.'
+      end
+      download_url.delete_suffix(suffix)
     end
 
     def set_configuration_env(env)

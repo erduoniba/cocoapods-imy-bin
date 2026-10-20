@@ -29,3 +29,27 @@ import Testing
     #expect(BinCommandBuilder.install().mutatesProject)
     #expect(BinCommandBuilder.update().mutatesProject)
 }
+
+@Test func publishAndSwitchCommandsIncludeExpectedFlags() {
+    let podspec = URL(fileURLWithPath: "/tmp/HDStaticPod.podspec")
+    let publish = BinCommandBuilder.publish(
+        podspecURL: podspec,
+        environment: .dev,
+        configuration: .release,
+        codeDependencies: true,
+        keepIntermediates: false,
+        dryRun: true
+    )
+    #expect(publish.taskKind == .publish)
+    #expect(publish.arguments == [
+        "bin",
+        "publish",
+        "/tmp/HDStaticPod.podspec",
+        "--env=dev",
+        "--configuration=Release",
+        "--code-dependencies",
+        "--dry-run",
+    ])
+    #expect(BinCommandBuilder.switchAll(mode: "local").arguments == ["bin", "switch", "--all", "local"])
+    #expect(BinCommandBuilder.resetModes().arguments == ["bin", "switch", "--reset"])
+}

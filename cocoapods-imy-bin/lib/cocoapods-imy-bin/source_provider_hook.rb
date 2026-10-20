@@ -45,7 +45,7 @@ Pod::HooksManager.register('cocoapods-imy-bin', :source_provider) do |context, _
   if podfile
     # 添加源码私有源 && 二进制私有源
     added_sources = [sources_manager.code_source]
-    if podfile.use_binaries? || podfile.use_binaries_selector
+    if podfile.use_binaries? || podfile.use_binaries_selector || podfile.effective_mode_overrides.value?('binary')
       added_sources << sources_manager.binary_source
       added_sources.reverse!
    end

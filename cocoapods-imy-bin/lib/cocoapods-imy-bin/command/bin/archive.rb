@@ -44,9 +44,10 @@ module Pod
           UI.warn "====== cocoapods-imy-bin #{CBin::VERSION} 版本 ======== \n "
           UI.warn "======  #{@env} 环境 ======== \n "
 
+          @podspec = argv.shift_argument
           @code_dependencies = argv.flag?('code-dependencies')
           @framework_output = argv.flag?('framework-output', false )
-          @clean = argv.flag?('no-clean', false)
+          @clean = argv.flag?('clean', true)
           @zip = argv.flag?('zip', true)
           @all_make = argv.flag?('all-make', false )
           @sources = argv.option('sources') || []
@@ -185,7 +186,7 @@ module Pod
         def spec_file
           @spec_file ||= begin
                            if @podspec
-                             find_spec_file(@podspec)
+                             gen_file(find_spec_file(@podspec))
                            else
                              if code_spec_files.empty?
                                raise Informative, '当前目录下没有找到可用源码 podspec.'
@@ -198,19 +199,22 @@ module Pod
                          end
         end
 
-        def gen_file
-          spec_file = code_spec_files.first
-
+        def gen_file(spec_file = code_spec_files.first)
+          spec_basename = File.basename(spec_file.to_path)
           # {CBin::Config::Builder.instance.gen_dir: /private/var/tmp/imy_release/HDStaticPod-build-temp/bin-archive
           # 使用 split 方法分割字符串，并获取分割后的第一个部分
-          name = spec_file.to_path.split('.').first
+          name = spec_basename.split('.').first
           # 打包路径（private/var/tmp/imy_release）路径，解决多个电脑源码调试的问题
           gen_directory = "#{CBin::Config::Builder.instance.gen_dir}" + "/#{name}"
           FileUtils.rm_rf(gen_directory) if File.exist?(gen_directory)
           # 确保目标目录存在
           FileUtils.mkdir_p(gen_directory)
+          %w[LICENSE LICENSE.md].each do |license_name|
+            license_path = File.join(Pathname.pwd, license_name)
+            FileUtils.cp(license_path, File.join(gen_directory, license_name)) if File.file?(license_path)
+          end
           # 复制目录及其内容
-          gen_directory = "#{gen_directory}" + "/#{spec_file}"
+          gen_directory = "#{gen_directory}" + "/#{spec_basename}"
           # 复制目录及其内容
           FileUtils.cp_r(spec_file, gen_directory)
 

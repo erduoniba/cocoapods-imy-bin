@@ -2,6 +2,8 @@
 
 require 'cocoapods'
 require 'cocoapods-imy-bin/native/podfile_env'
+require 'cocoapods-imy-bin/pod_modes'
+require 'cocoapods-imy-bin/managed_policy'
 
 module Pod
   class Podfile
@@ -35,6 +37,56 @@ module Pod
       def set_configuration_env(env = "dev")
         set_internal_hash_value(CONFIGURATION_ENV, env)
       end
+
+      # 声明一个同时支持版本化依赖（source/binary）与本地路径开发（local）的组件。
+      # 例如：imy_pod 'HDStaticPod', '0.1.11', :path => '../HDStaticPod'
+      def imy_pod(name, *requirements)
+        valid_bin_plugin
+        raise Informative, '请指定组件名称.' if name.to_s.empty?
+
+        options = requirements.last.is_a?(Hash) ? requirements.pop.dup : {}
+        local_path = options.delete(:path) || options.delete('path')
+        version = requirements.first
+        root_name = Specification.root_name(name)
+
+        imy_pod_definitions[root_name] = {
+          'name' => root_name,
+          'version' => version&.to_s,
+          'path' => local_path&.to_s
+        }
+
+        mode = binary_mode_overrides[root_name] || ENV['IMY_POD_MODE']
+        if mode == 'local'
+          raise Informative, "#{root_name} 未声明本地 :path，无法使用 local 模式." if local_path.to_s.empty?
+
+          pod(name, options.merge(:path => local_path))
+        else
+          args = requirements.dup
+          args << options unless options.empty?
+          pod(name, *args)
+        end
+      end
+
+      # The platform owns version/mode decisions; only validated data is passed to CocoaPods DSL.
+      def imy_bin_dependencies(target_name, project:)
+        root = defined_in_file ? defined_in_file.dirname : Pod::Config.instance.installation_root
+        policy = CBin::ManagedPolicy.read(root, project: project)
+        if @imy_bin_managed_policy_project && @imy_bin_managed_policy_project != project
+          raise Informative, '一个 Podfile 只能管理一个平台工程.'
+        end
+        @imy_bin_managed_policy_project = project
+        target = policy['targets'].find { |entry| entry['name'] == target_name }
+        raise Informative, "策略 #{policy['revision']} 中没有 target #{target_name}." unless target
+        modes = managed_policy_modes
+        target['dependencies'].each do |entry|
+          previous = modes[entry['name']]
+          if previous && previous != entry['mode']
+            raise Informative, "#{entry['name']} 在不同 target 中的模式冲突."
+          end
+          modes[entry['name']] = entry['mode']
+          pod(entry['name'], entry['version'])
+        end
+      end
     end
 
     alias old_plugins plugins
@@ -63,6 +115,55 @@ module Pod
 
     def use_source_pods
       get_internal_hash_value(USE_SOURCE_PODS, []) + String(ENV[USE_SOURCE_PODS]).split('|').uniq
+    end
+
+    def binary_mode_overrides
+      project_root = defined_in_file ? defined_in_file.dirname : Pod::Config.instance.installation_root
+      CBin::ManagedPolicy.ci? ? {} : CBin::PodModes.read(project_root)
+    end
+
+    attr_reader :imy_bin_managed_policy_project
+
+    def managed_policy_modes
+      @imy_bin_managed_policy_modes ||= {}
+    end
+
+    def imy_pod_definitions
+      @imy_pod_definitions ||= {}
+    end
+
+    def effective_mode_for_pod(name, overrides = effective_mode_overrides)
+      root_name = Specification.root_name(name)
+      return 'local' if local_path_dependency?(root_name)
+
+      mode = overrides[root_name]
+      return mode if mode
+
+      return 'source' unless ([name, root_name] & use_source_pods).empty?
+
+      use_binaries? ? 'binary' : 'source'
+    end
+
+    def effective_mode_overrides
+      managed_policy_modes.merge(binary_mode_overrides)
+    end
+
+    def use_binary_for_spec?(rspec, overrides = effective_mode_overrides)
+      name = rspec.root.name
+      return false if local_path_dependency?(name)
+
+      mode = overrides[name]
+      return mode == 'binary' if mode
+
+      !!(([rspec.name, name] & use_source_pods).empty? &&
+        (use_binaries? || use_binaries_selector) &&
+        (use_binaries_selector.nil? || use_binaries_selector.call(rspec.spec)))
+    end
+
+    def local_path_dependency?(name)
+      dependencies.any? { |dependency|
+        dependency.root_name == name && dependency.external_source&.key?(:path)
+      }
     end
 
     def configuration_env

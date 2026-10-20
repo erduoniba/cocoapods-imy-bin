@@ -21,6 +21,8 @@ struct ContentView: View {
                     OverviewView()
                 case .server:
                     BinaryServerView()
+                case .dependencies:
+                    ManagedDependenciesView()
                 case .build:
                     TasksView()
                 case .logs:
@@ -152,6 +154,115 @@ private struct BinaryServerView: View {
     }
 }
 
+private struct ManagedDependenciesView: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("工程依赖管理")
+                        .font(.largeTitle.bold())
+                    Text("管理 Podfile 中的组件模式（local / source / binary），或同步团队平台策略快照。")
+                        .foregroundStyle(.secondary)
+                }
+
+                GroupBox("Podfile 组件依赖（.imy-bin-modes.yml）") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if model.localComponents.isEmpty {
+                            EmptyHint(text: "当前工程的 Podfile 中未检测到可切换的组件声明。")
+                        } else {
+                            HStack(spacing: 10) {
+                                Text("全局切换：").font(.subheadline.bold())
+                                Button("全部本地 (local)") { model.switchAllComponents(to: "local") }
+                                Button("全部源码 (source)") { model.switchAllComponents(to: "source") }
+                                Button("全部二进制 (binary)") { model.switchAllComponents(to: "binary") }
+                                Spacer()
+                                Button("重置覆盖") { model.resetComponentModes() }
+                            }
+                            Divider()
+                            ForEach(model.localComponents) { item in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.name).font(.headline)
+                                        Text(
+                                            "\(item.declaredVersion ?? "未固定版本") · 当前模式：\(item.effectiveMode)"
+                                            + (item.overrideMode != nil ? "（本地覆盖）" : "")
+                                            + (item.localPath.map { " · path: \($0)" } ?? "")
+                                        )
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Button("本地") { model.switchLocalComponent(item.name, to: "local") }
+                                        .disabled(!item.supportsLocal || item.effectiveMode == "local")
+                                    Button("源码") { model.switchLocalComponent(item.name, to: "source") }
+                                        .disabled(item.effectiveMode == "source")
+                                    Button("二进制") { model.switchLocalComponent(item.name, to: "binary") }
+                                        .disabled(item.effectiveMode == "binary")
+                                }
+                                if item.id != model.localComponents.last?.id {
+                                    Divider()
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+
+                GroupBox("同步平台策略快照（可选）") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        TextField("平台工程标识", text: $model.managedProjectKey)
+                        TextField("策略版本 UUID（开发环境可留空使用已启用版本）", text: $model.managedPolicyRevision)
+                        Text("平台令牌从登录 Shell 的 IMY_BIN_PLATFORM_TOKEN 读取，不保存在客户端。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("同步策略") { model.runPolicySync() }
+                            .buttonStyle(.borderedProminent)
+                        if let error = model.managedPolicyError {
+                            Label(error, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+                if let policy = model.managedPolicy {
+                    Text("\(policy.project) · 版本 \(policy.revision)")
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                    ForEach(policy.targets) { target in
+                        GroupBox(target.name) {
+                            if target.dependencies.isEmpty {
+                                EmptyHint(text: "该 target 没有平台托管的内部组件。")
+                            } else {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    ForEach(target.dependencies) { dependency in
+                                        HStack {
+                                            VStack(alignment: .leading) {
+                                                Text(dependency.name).font(.headline)
+                                                Text("\(dependency.version) · 团队策略：\(dependency.mode)")
+                                                    .font(.caption.monospaced())
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            Spacer()
+                                            Button("本地源码") { model.switchMode(dependency, to: "source") }
+                                            Button("本地二进制") { model.switchMode(dependency, to: "binary") }
+                                        }
+                                        Divider()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    EmptyHint(text: "当前工程没有策略快照。先配置平台服务和工程标识，然后同步。")
+                }
+            }
+            .padding(24)
+        }
+        .disabled(model.project == nil || model.isRunning)
+    }
+}
+
 private struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
 
@@ -272,7 +383,9 @@ private struct TasksView: View {
                     }
                 }
                 Toggle("构建缺失二进制的依赖（--all-make）", isOn: $model.buildMissingDependencies)
+                Toggle("构建时使用源码依赖（--code-dependencies）", isOn: $model.codeDependencies)
                 Toggle("保留中间产物（--no-clean）", isOn: $model.keepIntermediates)
+                Toggle("发布预检模式，只构建不上传（--dry-run）", isOn: $model.publishDryRun)
             }
 
             Section("操作") {
@@ -280,10 +393,12 @@ private struct TasksView: View {
                     Button("安装依赖") { model.runInstall() }
                     Button("更新依赖") { model.runUpdate() }
                     Button("构建二进制") { model.runArchive() }
+                        .disabled(model.selectedPodspec == nil)
+                    Button(model.publishDryRun ? "发布预检 (Dry Run)" : "发布组件 (Publish)") { model.runPublish() }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.selectedPodspec == nil)
                 }
-                Text("这些操作会调用当前 Ruby 环境中的 pod bin。发布上传暂未开放；已可在“制品服务”中只读浏览 binary-server。")
+                Text("操作会调用当前环境的 pod bin：构建出 XCFramework 并发布到源码/二进制 spec 仓库与 binary-server。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
