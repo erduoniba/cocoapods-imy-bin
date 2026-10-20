@@ -191,7 +191,7 @@ function createEnterpriseRouter({ config }) {
     }
   })
 
-  router.get('/dashboard', async (ctx) => {
+  router.get(['/', '/dashboard'], async (ctx) => {
     ctx.type = 'text/html; charset=utf-8'
     ctx.body = renderDashboardHtml()
   })
