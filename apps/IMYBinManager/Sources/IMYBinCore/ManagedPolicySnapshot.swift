@@ -173,10 +173,20 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
         excludingSelfComponent: String? = nil,
         defaultEnabledNames: Set<String>? = nil
     ) -> ComponentConfigTable {
+        let effectiveSelf: String? = excludingSelfComponent ?? {
+            let parent = appDirectoryURL.deletingLastPathComponent()
+            if let files = try? FileManager.default.contentsOfDirectory(atPath: parent.path) {
+                if let specFile = files.first(where: { $0.hasSuffix(".podspec") && !$0.hasSuffix(".podspec.json") }) {
+                    return (specFile as NSString).deletingPathExtension
+                }
+            }
+            return nil
+        }()
+
         let overrides = PodfileComponentInspector.readModeOverrides(from: appDirectoryURL)
         if var existing = try? read(from: appDirectoryURL) {
-            if let excludingSelfComponent {
-                existing.components.removeAll { $0.name == excludingSelfComponent }
+            if let effectiveSelf {
+                existing.components.removeAll { $0.name == effectiveSelf }
             }
             var seen = Set(existing.components.map(\.name))
             for idx in existing.components.indices {
@@ -185,7 +195,7 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
                     existing.components[idx].mode = overrideMode
                 }
             }
-            for spec in workspacePodspecs where !seen.contains(spec.name) && spec.name != excludingSelfComponent {
+            for spec in workspacePodspecs where !seen.contains(spec.name) && spec.name != effectiveSelf {
                 seen.insert(spec.name)
                 let relPath = relativePath(from: appDirectoryURL, to: spec.repositoryURL)
                 let isEnabled = defaultEnabledNames.map { $0.contains(spec.name) } ?? true
@@ -205,7 +215,7 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
 
         let podfileDeps = PodfileComponentInspector.inspectPodfileDeclarationsOnly(from: appDirectoryURL)
         var map: [String: ComponentConfigEntry] = [:]
-        for dep in podfileDeps where dep.name != excludingSelfComponent {
+        for dep in podfileDeps where dep.name != effectiveSelf {
             map[dep.name] = ComponentConfigEntry(
                 name: dep.name,
                 version: dep.declaredVersion,
@@ -214,7 +224,7 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
                 enabled: true
             )
         }
-        for spec in workspacePodspecs where spec.name != excludingSelfComponent {
+        for spec in workspacePodspecs where spec.name != effectiveSelf {
             let relPath = relativePath(from: appDirectoryURL, to: spec.repositoryURL)
             if var entry = map[spec.name] {
                 if entry.version == nil || entry.version?.isEmpty == true {
@@ -247,6 +257,18 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
 
     public func write(to appDirectoryURL: URL) throws {
         var copy = self
+        let detectedSelf: String? = {
+            let parent = appDirectoryURL.deletingLastPathComponent()
+            if let files = try? FileManager.default.contentsOfDirectory(atPath: parent.path) {
+                if let specFile = files.first(where: { $0.hasSuffix(".podspec") && !$0.hasSuffix(".podspec.json") }) {
+                    return (specFile as NSString).deletingPathExtension
+                }
+            }
+            return nil
+        }()
+        if let detectedSelf {
+            copy.components.removeAll { $0.name == detectedSelf }
+        }
         copy.updatedAt = ISO8601DateFormatter().string(from: Date())
         copy.components.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
 

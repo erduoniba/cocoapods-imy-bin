@@ -108,8 +108,20 @@ module Pod
         default_mode = use_binaries? ? 'binary' : 'source'
         config = CBin::ComponentConfig.load_or_bootstrap(root, default_mode: default_mode)
         current_target = target_name || (current_target_definition.name rescue nil)
+
+        # 防御性过滤：若当前 Podfile 属于某个 Pod 的 Example 工程，跳过该 Pod 自身（避免与 pod 'SelfPod', :path => '../' 冲突）
+        is_example = root.basename.to_s.casecmp('example').zero?
+        self_spec_file = Dir.glob(File.join(root.dirname.to_s, '*.podspec')).first if is_example
+        self_pod_name = self_spec_file ? File.basename(self_spec_file, '.podspec') : nil
+
+        # 检查当前 target 已经显式声明的 dependencies（避免 duplicate sources 冲突）
+        declared_pod_names = (current_target_definition.dependencies.map(&:name) rescue []) || []
+
         config['components'].each do |entry|
           next if entry['enabled'] == false
+          name = entry['name']
+          next if self_pod_name && name == self_pod_name
+          next if declared_pod_names.include?(name)
           if current_target && entry['targets'].is_a?(Array) && !entry['targets'].empty?
             next unless entry['targets'].include?(current_target)
           end

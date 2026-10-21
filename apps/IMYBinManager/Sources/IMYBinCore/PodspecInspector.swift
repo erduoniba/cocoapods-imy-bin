@@ -288,7 +288,7 @@ public enum PodspecInspector {
             return
         }
         let template = """
-        use_frameworks!
+        use_frameworks! :linkage => :static
 
         platform :ios, '\(deploymentTarget)'
 
