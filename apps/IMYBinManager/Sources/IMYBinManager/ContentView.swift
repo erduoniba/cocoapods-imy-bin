@@ -187,7 +187,7 @@ private struct AppTopBar: View {
 
                 Menu {
                     Button("打开通用组件工作台") {
-                        openWindow(id: "component-manager")
+                        WindowManager.activateOrCreateComponentManagerWindow(openWindow: openWindow)
                     }
                     if !model.componentPodspecs.isEmpty {
                         Divider()
@@ -1144,7 +1144,7 @@ private struct ComponentTopBar: View {
 
             // 返回 App 依赖窗口
             Button {
-                openWindow(id: "app-manager")
+                WindowManager.activateOrCreateAppManagerWindow(openWindow: openWindow)
             } label: {
                 Label("App 依赖窗口 (⇧⌘1)", systemImage: "app.badge")
             }

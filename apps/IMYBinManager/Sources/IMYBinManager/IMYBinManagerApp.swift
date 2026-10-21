@@ -1,3 +1,4 @@
+import IMYBinCore
 import SwiftUI
 
 @main
@@ -6,7 +7,7 @@ struct IMYBinManagerApp: App {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
-        WindowGroup("IMY Bin — App 依赖管理工作台", id: "app-manager") {
+        Window("IMY Bin — App 依赖管理工作台", id: WorkbenchWindowIdentifier.appManager) {
             ContentView()
                 .environmentObject(model)
                 .frame(minWidth: 960, minHeight: 640)
@@ -21,12 +22,12 @@ struct IMYBinManagerApp: App {
             }
             CommandMenu("工作台窗口") {
                 Button("打开 App 依赖管理窗口") {
-                    openWindow(id: "app-manager")
+                    WindowManager.activateOrCreateAppManagerWindow(openWindow: openWindow)
                 }
                 .keyboardShortcut("1", modifiers: [.command, .shift])
 
                 Button("打开组件管理与发布窗口") {
-                    openWindow(id: "component-manager")
+                    WindowManager.activateOrCreateComponentManagerWindow(openWindow: openWindow)
                 }
                 .keyboardShortcut("2", modifiers: [.command, .shift])
 
@@ -35,7 +36,7 @@ struct IMYBinManagerApp: App {
                     Menu("打开独立组件窗口") {
                         ForEach(model.componentPodspecs) { spec in
                             Button("打开 \(spec.name) 窗口") {
-                                openWindow(id: "component-window", value: spec.name)
+                                openWindow(id: WorkbenchWindowIdentifier.componentWindow, value: spec.name)
                             }
                         }
                     }
@@ -43,14 +44,14 @@ struct IMYBinManagerApp: App {
             }
         }
 
-        WindowGroup("IMY Bin — 组件工作台", id: "component-window", for: String.self) { $componentName in
+        WindowGroup("IMY Bin — 组件工作台", id: WorkbenchWindowIdentifier.componentWindow, for: String.self) { $componentName in
             ComponentWorkspaceView(boundComponentName: componentName)
                 .environmentObject(model)
                 .frame(minWidth: 980, minHeight: 680)
         }
         .windowStyle(.titleBar)
 
-        Window("IMY Bin — 组件管理与发布工作台", id: "component-manager") {
+        Window("IMY Bin — 组件管理与发布工作台", id: WorkbenchWindowIdentifier.componentManager) {
             ComponentWorkspaceView(boundComponentName: nil)
                 .environmentObject(model)
                 .frame(minWidth: 980, minHeight: 680)
@@ -78,18 +79,18 @@ struct IMYBinManagerApp: App {
                 Divider()
 
                 Button("打开 App 依赖管理窗口 (⇧⌘1)") {
-                    openWindow(id: "app-manager")
+                    WindowManager.activateOrCreateAppManagerWindow(openWindow: openWindow)
                 }
 
                 Button("打开组件管理与发布窗口 (⇧⌘2)") {
-                    openWindow(id: "component-manager")
+                    WindowManager.activateOrCreateComponentManagerWindow(openWindow: openWindow)
                 }
 
                 if !model.componentPodspecs.isEmpty {
                     Menu("打开独立组件窗口") {
                         ForEach(model.componentPodspecs) { spec in
                             Button("打开 \(spec.name) 窗口") {
-                                openWindow(id: "component-window", value: spec.name)
+                                openWindow(id: WorkbenchWindowIdentifier.componentWindow, value: spec.name)
                             }
                         }
                     }

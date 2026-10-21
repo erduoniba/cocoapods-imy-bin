@@ -278,3 +278,17 @@ import Testing
     let info3 = try PodspecInspector.inspect(specFile, includeGitStatus: false)
     #expect(info3.dependencies.isEmpty)
 }
+
+@Test func workbenchWindowIdentifierMatching() {
+    #expect(WorkbenchWindowIdentifier.isAppManagerWindow(title: "IMY Bin — App 依赖管理工作台", identifier: "app-manager"))
+    #expect(WorkbenchWindowIdentifier.isAppManagerWindow(title: "IMY Bin — App 依赖管理工作台", identifier: nil))
+    #expect(WorkbenchWindowIdentifier.isAppManagerWindow(title: "App 依赖管理工作台", identifier: "app-manager-AppKitWindow"))
+    #expect(WorkbenchWindowIdentifier.isAppManagerWindow(title: "", identifier: "app-manager"))
+    #expect(!WorkbenchWindowIdentifier.isAppManagerWindow(title: "IMY Bin — 组件管理与发布工作台", identifier: "component-manager"))
+    #expect(!WorkbenchWindowIdentifier.isAppManagerWindow(title: "IMY Bin — 组件工作台", identifier: "component-window"))
+
+    #expect(WorkbenchWindowIdentifier.isComponentManagerWindow(title: "IMY Bin — 组件管理与发布工作台", identifier: "component-manager"))
+    #expect(WorkbenchWindowIdentifier.isComponentManagerWindow(title: "组件管理与发布工作台", identifier: nil))
+    #expect(!WorkbenchWindowIdentifier.isComponentManagerWindow(title: "IMY Bin — App 依赖管理工作台", identifier: "app-manager"))
+    #expect(!WorkbenchWindowIdentifier.isComponentManagerWindow(title: "IMY Bin — 组件工作台", identifier: "component-window"))
+}

@@ -121,3 +121,24 @@ public enum ProcessEvent: Sendable {
     case output(String)
     case finished(Int32)
 }
+
+public struct WorkbenchWindowIdentifier: Sendable {
+    public static let appManager = "app-manager"
+    public static let componentManager = "component-manager"
+    public static let componentWindow = "component-window"
+
+    public static func isAppManagerWindow(title: String, identifier: String?) -> Bool {
+        if let identifier, identifier.contains(appManager) {
+            return true
+        }
+        return title.contains("App 依赖管理工作台") || (title.contains("App 依赖") && !title.contains("组件"))
+    }
+
+    public static func isComponentManagerWindow(title: String, identifier: String?) -> Bool {
+        if let identifier, identifier.contains(componentManager) {
+            return true
+        }
+        return title.contains("组件管理与发布工作台")
+    }
+}
+
