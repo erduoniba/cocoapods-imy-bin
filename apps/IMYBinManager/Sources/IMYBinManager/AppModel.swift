@@ -805,8 +805,8 @@ final class AppModel: ObservableObject {
             guard saveComponentExampleConfigTable(for: compName) else { return }
         }
         if autoInstallComponentExampleAfterSwitch {
-            guard let exampleDir = info?.exampleDirectoryURL else { return }
-            run([BinCommandBuilder.install()], in: exampleDir, scope: .component(name: compName))
+            guard let info, let targetDir = installableDirectory(for: info) else { return }
+            run([BinCommandBuilder.install()], in: targetDir, scope: .component(name: compName))
         }
     }
 
@@ -822,8 +822,8 @@ final class AppModel: ObservableObject {
             guard saveComponentExampleConfigTable(for: compName) else { return }
         }
         if autoInstallComponentExampleAfterSwitch {
-            guard let exampleDir = info?.exampleDirectoryURL else { return }
-            run([BinCommandBuilder.install()], in: exampleDir, scope: .component(name: compName))
+            guard let info, let targetDir = installableDirectory(for: info) else { return }
+            run([BinCommandBuilder.install()], in: targetDir, scope: .component(name: compName))
         }
     }
 
@@ -861,8 +861,9 @@ final class AppModel: ObservableObject {
         return selectedURL.path
     }
 
-    func switchAllComponentExampleDeps(to mode: String) {
-        let compName = selectedComponentInfo?.name ?? ""
+    func switchAllComponentExampleDeps(to mode: String, for componentName: String? = nil) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        let compName = info?.name ?? ""
         if var table = componentConfigTable {
             for idx in table.components.indices {
                 if mode == "local" && !table.components[idx].supportsLocal { continue }
@@ -870,32 +871,59 @@ final class AppModel: ObservableObject {
             }
             table.defaultMode = mode
             componentConfigTable = table
-            guard saveComponentExampleConfigTable() else { return }
+            guard saveComponentExampleConfigTable(for: compName) else { return }
         }
         if autoInstallComponentExampleAfterSwitch {
-            guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return }
-            run([BinCommandBuilder.install()], in: exampleDir, scope: .component(name: compName))
+            guard let info, let targetDir = installableDirectory(for: info) else { return }
+            run([BinCommandBuilder.install()], in: targetDir, scope: .component(name: compName))
         }
+    }
+
+    func installableDirectory(for info: ComponentPodspecInfo) -> URL? {
+        if let exampleDir = info.exampleDirectoryURL {
+            return exampleDir
+        }
+        let rootPodfile = info.repositoryURL.appendingPathComponent("Podfile")
+        if FileManager.default.fileExists(atPath: rootPodfile.path) {
+            return info.repositoryURL
+        }
+        return nil
+    }
+
+    func runComponentInstall(for componentName: String? = nil) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let info else {
+            alertMessage = "请先选择一个组件"
+            return
+        }
+        guard let targetDir = installableDirectory(for: info) else {
+            alertMessage = "组件「\(info.name)」目录下未检测到包含 Podfile 的工程（如 Example/Podfile），无法执行 pod bin install。"
+            return
+        }
+        _ = saveComponentExampleConfigTable(for: info.name)
+        run([BinCommandBuilder.install()], in: targetDir, scope: .component(name: info.name))
+    }
+
+    func runComponentUpdate(for componentName: String? = nil) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let info else {
+            alertMessage = "请先选择一个组件"
+            return
+        }
+        guard let targetDir = installableDirectory(for: info) else {
+            alertMessage = "组件「\(info.name)」目录下未检测到包含 Podfile 的工程（如 Example/Podfile），无法执行 pod bin update。"
+            return
+        }
+        _ = saveComponentExampleConfigTable(for: info.name)
+        run([BinCommandBuilder.update()], in: targetDir, scope: .component(name: info.name))
     }
 
     func installComponentExampleDependencies(for componentName: String? = nil) {
-        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
-        guard let exampleDir = info?.exampleDirectoryURL else {
-            alertMessage = "当前组件没有 Example 工程目录"
-            return
-        }
-        guard saveComponentExampleConfigTable() else { return }
-        run([BinCommandBuilder.install()], in: exampleDir, scope: .component(name: info?.name ?? ""))
+        runComponentInstall(for: componentName)
     }
 
     func updateComponentExampleDependencies(for componentName: String? = nil) {
-        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
-        guard let exampleDir = info?.exampleDirectoryURL else {
-            alertMessage = "当前组件没有 Example 工程目录"
-            return
-        }
-        guard saveComponentExampleConfigTable() else { return }
-        run([BinCommandBuilder.update()], in: exampleDir, scope: .component(name: info?.name ?? ""))
+        runComponentUpdate(for: componentName)
     }
 
     // MARK: - Component Versioning & Publishing

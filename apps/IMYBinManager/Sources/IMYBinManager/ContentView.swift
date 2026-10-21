@@ -1107,6 +1107,37 @@ private struct ComponentTopBar: View {
                     }
                     .controlSize(.regular)
                 }
+
+                // 安装依赖快捷按钮组
+                HStack(spacing: 4) {
+                    Button {
+                        model.runComponentInstall(for: info.name)
+                    } label: {
+                        Label("安装依赖 (pod install)", systemImage: "arrow.down.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .disabled(model.isBusy(for: .component(name: info.name)))
+                    .help("执行 pod bin install 安装下层依赖与 Example 工程依赖")
+
+                    Menu {
+                        Button("更新依赖 (pod bin update)") {
+                            model.runComponentUpdate(for: info.name)
+                        }
+                        Divider()
+                        Button("重新生成 Example 配置表并安装") {
+                            _ = model.saveComponentExampleConfigTable(for: info.name)
+                            model.runComponentInstall(for: info.name)
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                    }
+                    .menuStyle(.borderedButton)
+                    .controlSize(.regular)
+                    .frame(width: 28)
+                    .disabled(model.isBusy(for: .component(name: info.name)))
+                }
             }
 
             Spacer()
@@ -1214,6 +1245,15 @@ private struct ComponentPublishCard: View {
 
             // 发布主操作按钮
             HStack(spacing: 12) {
+                Button {
+                    model.runComponentInstall(for: info.name)
+                } label: {
+                    Label("安装依赖", systemImage: "arrow.down.circle")
+                }
+                .controlSize(.regular)
+                .disabled(model.isBusy(for: .component(name: info.name)))
+                .help("执行 pod bin install 安装下层依赖与 Example 工程依赖")
+
                 Button("仅构建二进制 (pod bin archive)") {
                     model.runArchive(for: info.name)
                 }
@@ -1286,7 +1326,27 @@ private struct ComponentDependenciesCard: View {
             HStack {
                 Label("组件依赖关系 (s.dependency)", systemImage: "link")
                     .font(.system(size: 16, weight: .bold))
+
                 Spacer()
+
+                Button {
+                    model.runComponentInstall(for: info.name)
+                } label: {
+                    Label("安装依赖", systemImage: "arrow.down.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(model.isBusy(for: .component(name: info.name)))
+                .help("执行 pod bin install 安装下层依赖与 Example 工程依赖")
+
+                Button {
+                    model.runComponentUpdate(for: info.name)
+                } label: {
+                    Label("更新依赖", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.small)
+                .disabled(model.isBusy(for: .component(name: info.name)))
+
                 Text("\(info.dependencies.count) 个声明依赖")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1503,15 +1563,17 @@ private struct ComponentExampleDependenciesSection: View {
                 .controlSize(.small)
 
                 Button("更新依赖 (pod update)") {
-                    model.updateComponentExampleDependencies(for: info.name)
+                    model.runComponentUpdate(for: info.name)
                 }
                 .controlSize(.small)
+                .disabled(model.isBusy(for: .component(name: info.name)))
 
                 Button("安装依赖 (pod install)") {
-                    model.installComponentExampleDependencies(for: info.name)
+                    model.runComponentInstall(for: info.name)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .disabled(model.isBusy(for: .component(name: info.name)))
             }
 
             HStack {
