@@ -169,8 +169,18 @@ private struct AppTopBar: View {
                 }
                 .help("缓存清理、Spec仓库更新、策略云端同步、工具链检查")
 
-                Button {
-                    openWindow(id: "component-manager")
+                Menu {
+                    Button("打开通用组件工作台") {
+                        openWindow(id: "component-manager")
+                    }
+                    if !model.componentPodspecs.isEmpty {
+                        Divider()
+                        ForEach(model.componentPodspecs) { spec in
+                            Button("打开 \(spec.name) 专属工作台") {
+                                openWindow(id: "component-window", value: spec.name)
+                            }
+                        }
+                    }
                 } label: {
                     Label("组件工作台", systemImage: "shippingbox.fill")
                 }
@@ -523,10 +533,29 @@ private struct ConsoleDrawer: View {
                         .controlSize(.mini)
                         .frame(width: 90)
 
+                        let records = model.taskRecords(for: scope)
+                        if !records.isEmpty {
+                            Menu("历史 (\(records.count))") {
+                                ForEach(records.reversed(), id: \.id) { task in
+                                    Button("\(task.title) · \(task.state.title)") {
+                                        model.selectTask(task.id, for: scope)
+                                    }
+                                }
+                            }
+                            .controlSize(.mini)
+                        }
+
+                        Button("复制") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(logContent, forType: .string)
+                        }
+                        .controlSize(.mini)
+
                         Button("清屏") {
                             model.clearLog(for: scope)
                         }
                         .controlSize(.mini)
+                        .disabled(model.isBusy(for: scope) || records.isEmpty)
 
                         if model.isBusy(for: scope) {
                             Button("取消", role: .destructive) {
@@ -599,12 +628,12 @@ private struct ConsoleDrawer: View {
 
     private var statusText: String {
         if model.isBusy(for: scope) {
-            return "执行中: \(model.activeTaskTitle(for: scope) ?? "正在处理")"
+            return "[\(scope.title)] 执行中: \(model.activeTaskTitle(for: scope) ?? "正在处理")"
         }
         if let task = model.selectedTask(for: scope) {
-            return "\(task.title) · \(task.state.title)"
+            return "[\(scope.title)] \(task.title) · \(task.state.title)"
         }
-        return "就绪 · 二进制服务: \(model.binaryServerAddress)"
+        return "[\(scope.title)] 就绪 · 二进制服务: \(model.binaryServerAddress)"
     }
 }
 
@@ -694,20 +723,45 @@ private struct ComponentTopBar: View {
     @Environment(\.openWindow) private var openWindow
     var boundComponentName: String? = nil
 
+    private var activeComponentInfo: ComponentPodspecInfo? {
+        if let boundComponentName, let info = model.localPodspecInfo(named: boundComponentName) {
+            return info
+        }
+        return model.selectedComponentInfo
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             // 组件选择下拉
             Menu {
-                ForEach(model.componentPodspecs) { spec in
-                    Button(spec.name) {
-                        model.selectedPodspec = spec.podspecURL
+                if let bound = boundComponentName, !bound.isEmpty {
+                    Text("当前窗口专属组件：\(bound)").font(.caption)
+                    Divider()
+                    ForEach(model.componentPodspecs) { spec in
+                        if spec.name != bound {
+                            Button("打开 \(spec.name) 专属窗口") {
+                                openWindow(id: "component-window", value: spec.name)
+                            }
+                        }
+                    }
+                } else {
+                    ForEach(model.componentPodspecs) { spec in
+                        Button(spec.name) {
+                            model.selectedPodspec = spec.podspecURL
+                        }
+                    }
+                    Divider()
+                    ForEach(model.componentPodspecs) { spec in
+                        Button("在专属独立窗口打开 \(spec.name)") {
+                            openWindow(id: "component-window", value: spec.name)
+                        }
                     }
                 }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "shippingbox.fill")
                         .foregroundStyle(Color.accentColor)
-                    Text(model.selectedComponentInfo?.name ?? boundComponentName ?? "选择组件")
+                    Text(activeComponentInfo?.name ?? boundComponentName ?? "选择组件")
                         .font(.headline)
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2)
@@ -717,7 +771,7 @@ private struct ComponentTopBar: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
 
-            if let info = model.selectedComponentInfo {
+            if let info = activeComponentInfo {
                 Text("v\(info.version)")
                     .font(.caption.monospaced().bold())
                     .padding(.horizontal, 6)
@@ -731,30 +785,32 @@ private struct ComponentTopBar: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-            }
 
-            // 快捷打开工具
-            HStack(spacing: 4) {
-                Button {
-                    model.openComponentInXcode()
-                } label: {
-                    Label("Xcode", systemImage: "hammer.fill")
-                }
-                .controlSize(.small)
+                // 快捷打开工具
+                HStack(spacing: 4) {
+                    Button {
+                        if let dir = info.exampleDirectoryURL ?? info.repositoryURL as URL? {
+                            _ = WorkspaceOpener.openInXcode(at: dir)
+                        }
+                    } label: {
+                        Label("Xcode", systemImage: "hammer.fill")
+                    }
+                    .controlSize(.small)
 
-                Button {
-                    model.showComponentInFinder()
-                } label: {
-                    Label("Finder", systemImage: "folder")
-                }
-                .controlSize(.small)
+                    Button {
+                        NSWorkspace.shared.selectFile(info.podspecURL.path, inFileViewerRootedAtPath: "")
+                    } label: {
+                        Label("Finder", systemImage: "folder")
+                    }
+                    .controlSize(.small)
 
-                Button {
-                    model.openComponentInTerminal()
-                } label: {
-                    Label("终端", systemImage: "terminal")
+                    Button {
+                        WorkspaceOpener.openInTerminal(at: info.repositoryURL)
+                    } label: {
+                        Label("终端", systemImage: "terminal")
+                    }
+                    .controlSize(.small)
                 }
-                .controlSize(.small)
             }
 
             Spacer()
@@ -861,12 +917,12 @@ private struct ComponentPublishCard: View {
             // 发布主操作按钮
             HStack(spacing: 12) {
                 Button("仅构建二进制 (pod bin archive)") {
-                    model.runArchive()
+                    model.runArchive(for: info.name)
                 }
                 .disabled(model.isBusy(for: .component(name: info.name)))
 
                 Button("发布预检 (pod bin publish --dry-run)") {
-                    model.runPublishDryRun()
+                    model.runPublishDryRun(for: info.name)
                 }
                 .disabled(model.isBusy(for: .component(name: info.name)))
 
@@ -904,10 +960,10 @@ private struct ComponentPublishCard: View {
             titleVisibility: .visible
         ) {
             Button("确认发布 \(info.name) v\(info.version)") {
-                model.runOfficialPublish()
+                model.runOfficialPublish(for: info.name)
             }
             Button("先执行预检 (--dry-run)") {
-                model.runPublishDryRun()
+                model.runPublishDryRun(for: info.name)
             }
             Button("取消", role: .cancel) {}
         } message: {
