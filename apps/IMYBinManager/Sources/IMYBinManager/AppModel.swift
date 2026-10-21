@@ -104,6 +104,8 @@ final class AppModel: ObservableObject {
     @Published var skipTag = false
     @Published var skipCodeSpec = false
     @Published var publishDryRun = false
+    @Published var autoCommitAndPushBeforePublish = true
+    @Published var customPublishCommitMessage = ""
 
     // REQ-01: Recent Workspaces & Favorites
     @Published private(set) var recentWorkspaces: [RecentWorkspace] = []
@@ -1174,20 +1176,42 @@ final class AppModel: ObservableObject {
         }
         let workingDir = podspec.standardizedFileURL.deletingLastPathComponent()
         let currentVer = editingComponentVersion.isEmpty ? (selectedComponentInfo?.version ?? "") : editingComponentVersion
+        let compName = selectedComponentInfo?.name ?? podspec.deletingPathExtension().lastPathComponent
         let isPrerelease = currentVer.contains("-") || currentVer.localizedCaseInsensitiveContains("beta")
+
+        var commands: [CommandSpec] = []
+
+        if !dryRun && autoCommitAndPushBeforePublish {
+            let commitCmd = BinCommandBuilder.gitAutoCommitAndPush(
+                componentName: compName,
+                version: currentVer,
+                customMessage: customPublishCommitMessage
+            )
+            commands.append(commitCmd)
+
+            if !skipTag {
+                let tagCmd = BinCommandBuilder.gitTagAndPush(version: currentVer)
+                commands.append(tagCmd)
+            }
+        }
+
         let command = BinCommandBuilder.publish(
             podspecURL: podspec,
             environment: environment,
             configuration: configuration,
             codeDependencies: codeDependencies,
             keepIntermediates: keepIntermediates,
-            skipTag: skipTag,
+            skipTag: (!dryRun && autoCommitAndPushBeforePublish && !skipTag) ? true : skipTag,
             skipCodeSpec: skipCodeSpec,
             dryRun: dryRun,
-            allowPrerelease: isPrerelease
+            allowPrerelease: isPrerelease,
+            autoCommit: !dryRun && autoCommitAndPushBeforePublish,
+            push: !dryRun && autoCommitAndPushBeforePublish
         )
+        commands.append(command)
+
         run(
-            [command],
+            commands,
             in: workingDir,
             logDestination: .componentWindow,
             refreshBinaryServerOnCompletion: !dryRun

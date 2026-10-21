@@ -977,6 +977,7 @@ private struct ComponentPublishView: View {
                             }
 
                             LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], spacing: 10) {
+                                Toggle("发布前自动提交并推送本地代码（Git commit & push）", isOn: $model.autoCommitAndPushBeforePublish)
                                 Toggle("构建时下层依赖使用源码（--code-dependencies）", isOn: $model.codeDependencies)
                                 Toggle("保留构建中间产物（--no-clean）", isOn: $model.keepIntermediates)
                                 Toggle("跳过 Git Tag 创建/校验（--skip-tag）", isOn: $model.skipTag)
@@ -999,7 +1000,7 @@ private struct ComponentPublishView: View {
                                 }
                                 .buttonStyle(.borderedProminent)
                             }
-                            Text("正式发布将按序执行：Git 工作区与 Tag 检查 → 推送源码 Spec → 构建真机+模拟器 XCFramework → 上传 ZIP 到 binary-server → 生成并推送二进制 Spec（失败自动回滚）。")
+                            Text("正式发布将按序执行：\(model.autoCommitAndPushBeforePublish ? "自动提交本地代码变更并推送到远端 → 更新并推送 Git Tag → " : "")推送源码 Spec → 构建真机+模拟器 XCFramework → 上传 ZIP 到 binary-server → 生成并推送二进制 Spec（失败自动回滚）。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -1018,7 +1019,7 @@ private struct ComponentPublishView: View {
                         }
                         Button("取消", role: .cancel) {}
                     } message: {
-                        Text("组件：\(info.name)\n版本：\(info.version)\n环境：\(model.environment.title) (\(model.configuration.rawValue))\n制品服务：\(model.binaryServerAddress)")
+                        Text("组件：\(info.name)\n版本：\(info.version)\n环境：\(model.environment.title) (\(model.configuration.rawValue))\n制品服务：\(model.binaryServerAddress)\n自动提交推送：\(model.autoCommitAndPushBeforePublish ? "开启 (Git commit & push)" : "关闭")")
                     }
 
                     if let artifact = model.latestArtifactReport {

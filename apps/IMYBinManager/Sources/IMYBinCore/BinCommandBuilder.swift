@@ -117,7 +117,9 @@ public enum BinCommandBuilder {
         skipTag: Bool = false,
         skipCodeSpec: Bool = false,
         dryRun: Bool = false,
-        allowPrerelease: Bool = false
+        allowPrerelease: Bool = false,
+        autoCommit: Bool = false,
+        push: Bool = false
     ) -> CommandSpec {
         var arguments = [
             "bin",
@@ -144,12 +146,47 @@ public enum BinCommandBuilder {
         if allowPrerelease {
             arguments.append("--allow-prerelease")
         }
+        if autoCommit {
+            arguments.append("--auto-commit")
+        }
+        if push {
+            arguments.append("--push")
+        }
         return CommandSpec(
             executableName: "pod",
             arguments: arguments,
             title: dryRun ? "发布预检（dry-run）" : "发布组件",
             mutatesProject: false,
             taskKind: .publish
+        )
+    }
+
+    public static func gitAutoCommitAndPush(
+        componentName: String,
+        version: String,
+        customMessage: String? = nil
+    ) -> CommandSpec {
+        let commitMsg = (customMessage?.isEmpty == false) ? customMessage! : "chore: release \(componentName) \(version)"
+        let script = "git add -A && (git diff-index --quiet --cached HEAD 2>/dev/null || git commit -m \"\(commitMsg)\") && (git remote | grep -q \"^origin$\" && git push origin HEAD || true)"
+        return CommandSpec(
+            executableName: "sh",
+            arguments: ["-c", script],
+            title: "提交并推送代码变更 (Git commit & push)",
+            mutatesProject: true,
+            taskKind: .custom
+        )
+    }
+
+    public static func gitTagAndPush(
+        version: String
+    ) -> CommandSpec {
+        let script = "git tag -f \"\(version)\" && (git remote | grep -q \"^origin$\" && git push origin \"\(version)\" --force || true)"
+        return CommandSpec(
+            executableName: "sh",
+            arguments: ["-c", script],
+            title: "更新并推送 Git Tag \(version)",
+            mutatesProject: true,
+            taskKind: .custom
         )
     }
 

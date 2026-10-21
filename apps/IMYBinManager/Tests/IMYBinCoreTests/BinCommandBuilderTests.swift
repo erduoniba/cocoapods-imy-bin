@@ -40,7 +40,9 @@ import Testing
         keepIntermediates: false,
         skipTag: true,
         skipCodeSpec: true,
-        dryRun: true
+        dryRun: true,
+        autoCommit: true,
+        push: true
     )
     #expect(publish.taskKind == .publish)
     #expect(publish.arguments == [
@@ -53,8 +55,23 @@ import Testing
         "--skip-tag",
         "--skip-code-spec",
         "--dry-run",
+        "--auto-commit",
+        "--push",
     ])
     #expect(BinCommandBuilder.status(json: true).arguments == ["bin", "status", "--json"])
     #expect(BinCommandBuilder.switchAll(mode: "local").arguments == ["bin", "switch", "--all", "local"])
     #expect(BinCommandBuilder.resetModes().arguments == ["bin", "switch", "--reset"])
+
+    let gitCommit = BinCommandBuilder.gitAutoCommitAndPush(componentName: "HDDynamicPod", version: "0.1.4")
+    #expect(gitCommit.executableName == "sh")
+    #expect(gitCommit.arguments.count == 2)
+    #expect(gitCommit.arguments[0] == "-c")
+    #expect(gitCommit.arguments[1].contains("git add -A"))
+    #expect(gitCommit.arguments[1].contains("chore: release HDDynamicPod 0.1.4"))
+    #expect(gitCommit.arguments[1].contains("git push origin HEAD"))
+
+    let gitTag = BinCommandBuilder.gitTagAndPush(version: "0.1.4")
+    #expect(gitTag.executableName == "sh")
+    #expect(gitTag.arguments[1].contains("git tag -f \"0.1.4\""))
+    #expect(gitTag.arguments[1].contains("git push origin \"0.1.4\" --force"))
 }

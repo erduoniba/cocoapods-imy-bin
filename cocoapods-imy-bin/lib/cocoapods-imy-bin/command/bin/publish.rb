@@ -22,7 +22,9 @@ module Pod
             ['--dry-run', '只执行预检与本地归档构建，不打 Tag、不上传制品或推送 spec'],
             ['--skip-tag', '跳过创建组件 Git Tag'],
             ['--skip-code-spec', '跳过推送源码 podspec 到源码 spec 仓库'],
-            ['--allow-prerelease', '允许发布 pre-release 版本（例如 beta）']
+            ['--allow-prerelease', '允许发布 pre-release 版本（例如 beta）'],
+            ['--auto-commit', '发布前自动暂存并提交本地代码变更'],
+            ['--push', '发布时自动推送代码提交与 Git Tag 到远程仓库']
           ].concat(super)
         end
 
@@ -37,6 +39,8 @@ module Pod
           @skip_tag = argv.flag?('skip-tag', false)
           @skip_code_spec = argv.flag?('skip-code-spec', false)
           @allow_prerelease = argv.flag?('allow-prerelease', false)
+          @auto_commit = argv.flag?('auto-commit', false)
+          @push = argv.flag?('push', false)
           @created_tag = false
           CBin.config.set_configuration_env(@env)
           super
@@ -55,6 +59,8 @@ module Pod
         end
 
         def run
+          auto_commit_if_needed! if @auto_commit
+
           arguments = [@podspec.to_s, "--env=#{@env}", "--configuration=#{@configuration}"]
           arguments << '--code-dependencies' if @code_dependencies
           arguments << "--sources=#{@sources}" if @sources
@@ -76,6 +82,7 @@ module Pod
             ensure_git_tag! unless @skip_tag
             push_code_spec! unless @skip_code_spec
             CBin::Upload::Helper.new(@spec, @code_dependencies, @sources).upload
+            push_git_branch_and_tag! if @push
           rescue Exception => error
             rollback_git_tag! if @created_tag
             raise error
@@ -89,12 +96,70 @@ module Pod
           File.exist?(File.join(Dir.pwd, '.git'))
         end
 
+        def auto_commit_if_needed!
+          return unless git_repo?
+
+          status_out, status = Open3.capture2e('git', 'status', '--porcelain')
+          return unless status.success?
+          return if status_out.strip.empty?
+
+          UI.puts "检测到本地未提交代码变更，正在自动暂存并提交..."
+          _add_out, add_status = Open3.capture2e('git', 'add', '-A')
+          raise Informative, "自动暂存本地变更失败" unless add_status.success?
+
+          commit_msg = "chore: release #{@spec.name} #{@spec.version}"
+          commit_out, commit_status = Open3.capture2e('git', 'commit', '-m', commit_msg)
+          raise Informative, "自动提交本地变更失败: #{commit_out.strip}" unless commit_status.success?
+          UI.puts "已自动提交本地变更: #{commit_msg}"
+        end
+
+        def push_git_branch_and_tag!
+          return unless git_repo?
+
+          remotes_out, status = Open3.capture2e('git', 'remote')
+          return unless status.success?
+
+          remotes = remotes_out.split("\n").map(&:strip).reject(&:empty?)
+          return if remotes.empty?
+
+          remote = remotes.include?('origin') ? 'origin' : remotes.first
+
+          UI.puts "正在推送当前代码分支到 #{remote} HEAD..."
+          push_out, push_status = Open3.capture2e('git', 'push', remote, 'HEAD')
+          unless push_status.success?
+            UI.warn "推送代码分支到 #{remote} 失败: #{push_out.strip}"
+          end
+
+          unless @skip_tag
+            tag = @spec.version.to_s
+            UI.puts "正在推送 Tag #{tag} 到 #{remote}..."
+            tag_push_out, tag_push_status = Open3.capture2e('git', 'push', remote, tag, '--force')
+            unless tag_push_status.success?
+              UI.warn "推送 Tag #{tag} 到 #{remote} 失败: #{tag_push_out.strip}"
+            end
+          end
+        end
+
         def ensure_git_tag!
           return unless git_repo?
 
           tag = @spec.version.to_s
-          _out, status = Open3.capture2e('git', 'rev-parse', '-q', '--verify', "refs/tags/#{tag}")
-          return if status.success?
+          tag_rev, tag_status = Open3.capture2e('git', 'rev-parse', '-q', '--verify', "refs/tags/#{tag}")
+
+          if tag_status.success?
+            head_rev, head_status = Open3.capture2e('git', 'rev-parse', 'HEAD')
+            if head_status.success? && tag_rev.strip == head_rev.strip
+              UI.puts "本地 Git Tag #{tag} 已存在且指向当前最新提交."
+              return
+            else
+              UI.warn "本地 Git Tag #{tag} 已存在但指向旧提交，正在强制更新到当前最新提交..."
+              out, force_status = Open3.capture2e('git', 'tag', '-f', tag)
+              raise Informative, "更新 Git Tag #{tag} 失败: #{out.strip}" unless force_status.success?
+              @created_tag = true
+              UI.puts "已更新本地 Git Tag #{tag} 指向当前最新提交."
+              return
+            end
+          end
 
           out, create_status = Open3.capture2e('git', 'tag', tag)
           unless create_status.success?
