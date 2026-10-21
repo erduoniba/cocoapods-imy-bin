@@ -231,21 +231,21 @@ private struct AppFilterBar: View {
                 Text("分支 (\(branchCount))").tag("branch")
             }
             .pickerStyle(.segmented)
-            .frame(width: 380)
+            .frame(minWidth: 420, maxWidth: 480)
 
             Spacer()
 
             // 批量切换快捷操作
             HStack(spacing: 6) {
-                Text("批量切换:").font(.caption).foregroundStyle(.secondary)
+                Text("批量切换:").font(.subheadline).foregroundStyle(.secondary)
                 Button("全转本地") { model.switchAllComponents(to: "local") }
-                    .controlSize(.small)
+                    .controlSize(.regular)
                 Button("全转源码") { model.switchAllComponents(to: "source") }
-                    .controlSize(.small)
+                    .controlSize(.regular)
                 Button("全转二进制") { model.switchAllComponents(to: "binary") }
-                    .controlSize(.small)
+                    .controlSize(.regular)
                 Button("重置") { model.resetComponentModes() }
-                    .controlSize(.small)
+                    .controlSize(.regular)
             }
         }
         .padding(.horizontal, 16)
@@ -365,38 +365,38 @@ private struct ComponentConfigCard: View {
             .labelsHidden()
 
             // 组件名称与版本信息
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text(entry.name)
-                        .font(.system(.headline, design: .rounded))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
                         .strikethrough(!entry.enabled)
 
                     // 状态 Badge
                     if isPublished {
                         HStack(spacing: 3) {
-                            Circle().fill(.green).frame(width: 6, height: 6)
-                            Text("二进制已发布").font(.caption2).foregroundStyle(.green)
+                            Circle().fill(.green).frame(width: 7, height: 7)
+                            Text("二进制已发布").font(.system(size: 11, weight: .medium)).foregroundStyle(.green)
                         }
                     } else if entry.mode == "binary" {
                         HStack(spacing: 3) {
-                            Circle().fill(.orange).frame(width: 6, height: 6)
-                            Text("二进制未发布").font(.caption2).foregroundStyle(.orange)
+                            Circle().fill(.orange).frame(width: 7, height: 7)
+                            Text("二进制未发布").font(.system(size: 11, weight: .medium)).foregroundStyle(.orange)
                         }
                     }
                 }
 
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Text("版本:")
-                        .font(.caption2)
+                        .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
                     Text("v\(entry.version ?? localInfo?.version ?? "未知")")
-                        .font(.caption.monospaced().bold())
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
 
                     if let localInfo, localInfo.version != entry.version {
                         Button("同步本地 v\(localInfo.version)") {
                             model.syncConfigVersionFromLocalPodspec(entry.name)
                         }
-                        .controlSize(.mini)
+                        .controlSize(.small)
                     }
 
                     if !remoteVersions.isEmpty {
@@ -408,18 +408,18 @@ private struct ComponentConfigCard: View {
                             }
                         } label: {
                             Text("历史版本 (\(remoteVersions.count))")
-                                .font(.caption2)
+                                .font(.system(size: 12))
                         }
-                        .controlSize(.mini)
+                        .controlSize(.small)
                     }
 
                     if entry.mode == "branch", let b = entry.branch {
                         Text("分支: \(b)")
-                            .font(.caption2.monospaced())
+                            .font(.system(size: 12.5, weight: .medium, design: .monospaced))
                             .foregroundStyle(.purple)
                     } else if let path = entry.path {
                         Text("路径: \(path)")
-                            .font(.caption2)
+                            .font(.system(size: 12.5))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -427,7 +427,7 @@ private struct ComponentConfigCard: View {
 
             Spacer()
 
-            // 模式切换 Segmented 控制
+            // 模式切换 Segmented 控制（去除冗余英文括号，宽度给足，100% 完整展示绝不截断）
             Picker("", selection: Binding(
                 get: { entry.mode },
                 set: { newMode in
@@ -438,13 +438,13 @@ private struct ComponentConfigCard: View {
                     }
                 }
             )) {
-                Text("本地 (local)").tag("local")
-                Text("源码 (source)").tag("source")
-                Text("二进制 (binary)").tag("binary")
-                Text("分支 (branch)").tag("branch")
+                Text("本地").tag("local")
+                Text("源码").tag("source")
+                Text("二进制").tag("binary")
+                Text("分支").tag("branch")
             }
             .pickerStyle(.segmented)
-            .frame(width: 320)
+            .frame(width: 280)
             .popover(isPresented: $isBranchPopoverPresented) {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("配置 \(entry.name) Git 分支源码")
@@ -520,18 +520,45 @@ private struct ConsoleDrawer: View {
                 // 右侧控制按钮
                 if isExpanded {
                     HStack(spacing: 8) {
+                        // 字体缩放快捷调节
+                        HStack(spacing: 2) {
+                            Button {
+                                model.decreaseConsoleFontSize()
+                            } label: {
+                                Image(systemName: "textformat.size.smaller")
+                            }
+                            .controlSize(.small)
+                            .help("减小控制台字体")
+
+                            Text("\(Int(model.consoleFontSize))pt")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 32)
+
+                            Button {
+                                model.increaseConsoleFontSize()
+                            } label: {
+                                Image(systemName: "textformat.size.larger")
+                            }
+                            .controlSize(.small)
+                            .help("放大控制台字体")
+                        }
+                        .padding(.horizontal, 4)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+
                         TextField("搜索日志…", text: $model.logSearchQuery)
                             .textFieldStyle(.roundedBorder)
-                            .controlSize(.mini)
-                            .frame(width: 120)
+                            .controlSize(.small)
+                            .frame(width: 130)
 
                         Picker("", selection: $model.logFilterMode) {
-                            Text("全部").tag(LogFilterMode.all)
+                            Text("全部日志").tag(LogFilterMode.all)
                             Text("阶段与告警").tag(LogFilterMode.phaseAndWarning)
-                            Text("仅错误").tag(LogFilterMode.errorOnly)
+                            Text("仅看错误").tag(LogFilterMode.errorOnly)
                         }
-                        .controlSize(.mini)
-                        .frame(width: 90)
+                        .controlSize(.small)
+                        .frame(width: 105)
 
                         let records = model.taskRecords(for: scope)
                         if !records.isEmpty {
@@ -542,26 +569,26 @@ private struct ConsoleDrawer: View {
                                     }
                                 }
                             }
-                            .controlSize(.mini)
+                            .controlSize(.small)
                         }
 
                         Button("复制") {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(logContent, forType: .string)
                         }
-                        .controlSize(.mini)
+                        .controlSize(.small)
 
                         Button("清屏") {
                             model.clearLog(for: scope)
                         }
-                        .controlSize(.mini)
+                        .controlSize(.small)
                         .disabled(model.isBusy(for: scope) || records.isEmpty)
 
                         if model.isBusy(for: scope) {
                             Button("取消", role: .destructive) {
                                 model.cancelTask(for: scope)
                             }
-                            .controlSize(.mini)
+                            .controlSize(.small)
                         }
                     }
                 }
@@ -575,13 +602,13 @@ private struct ConsoleDrawer: View {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
                         Text(isExpanded ? "收起日志" : "控制台日志")
                     }
-                    .font(.caption)
+                    .font(.subheadline)
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.mini)
+                .controlSize(.small)
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 6)
+            .padding(.vertical, 7)
             .background(.bar)
 
             // 展开的日志终端内容
@@ -590,11 +617,12 @@ private struct ConsoleDrawer: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         Text(logContent.isEmpty ? "控制台输出将在这里实时显示。" : logContent)
-                            .font(.system(.caption, design: .monospaced))
+                            .font(.system(size: model.consoleFontSize, weight: .regular, design: .monospaced))
+                            .lineSpacing(4)
                             .foregroundStyle(logContent.isEmpty ? .secondary : Color(nsColor: .textColor))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .topLeading)
-                            .padding(10)
+                            .padding(12)
                             .id("logBottom")
                     }
                     .background(Color(nsColor: .textBackgroundColor))
@@ -602,7 +630,7 @@ private struct ConsoleDrawer: View {
                         proxy.scrollTo("logBottom", anchor: .bottom)
                     }
                 }
-                .frame(height: 220)
+                .frame(height: 280)
             }
         }
     }

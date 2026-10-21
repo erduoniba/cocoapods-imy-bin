@@ -132,6 +132,19 @@ final class AppModel: ObservableObject {
     @Published var isAppLogDrawerExpanded = false
     @Published var isComponentLogDrawerExpanded = false
     @Published var isToolboxSheetPresented = false
+    @Published var consoleFontSize: CGFloat = 13.5
+
+    func increaseConsoleFontSize() {
+        if consoleFontSize < 22 {
+            consoleFontSize += 1.0
+        }
+    }
+
+    func decreaseConsoleFontSize() {
+        if consoleFontSize > 10 {
+            consoleFontSize -= 1.0
+        }
+    }
 
     // Toolchain & Custom Path Overrides
     @Published var customCPHomeDir: String {
