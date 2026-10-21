@@ -54,11 +54,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private enum LogDestination {
-        case appWindow
-        case componentWindow
-    }
-
     @Published var selection: Page? = .overview
     @Published var componentSelection: ComponentPage? = .dependencies
     @Published private(set) var project: ProjectSnapshot?
@@ -133,6 +128,11 @@ final class AppModel: ObservableObject {
     @Published var logFilterMode: LogFilterMode = .all
     @Published var logSearchQuery = ""
 
+    // UI Drawer & Toolbox
+    @Published var isAppLogDrawerExpanded = false
+    @Published var isComponentLogDrawerExpanded = false
+    @Published var isToolboxSheetPresented = false
+
     // Toolchain & Custom Path Overrides
     @Published var customCPHomeDir: String {
         didSet {
@@ -148,7 +148,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var toolchain: ToolchainReport?
     @Published private(set) var isInspectingToolchain = false
     @Published private(set) var taskHistory = TaskHistory(persistenceURL: TaskHistory.defaultPersistenceURL)
-    @Published private(set) var selectedTaskID: UUID?
+    @Published var selectedAppTaskID: UUID?
+    @Published var selectedComponentTaskIDs: [String: UUID] = [:]
     @Published var binaryServerAddress: String {
         didSet {
             UserDefaults.standard.set(binaryServerAddress, forKey: Self.binaryServerAddressKey)
@@ -164,9 +165,9 @@ final class AppModel: ObservableObject {
     private static let customCPHomeDirKey = "IMYBinManager.customCPHomeDir"
     private static let customPluginLibDirKey = "IMYBinManager.customPluginLibDir"
     private let projectInspector = ProjectInspector()
-    private let processRunner = ProcessRunner()
     private let binaryServerClient = BinaryServerClient()
-    private var executionTask: Task<Void, Never>?
+    private var executionTasks: [TaskScope: Task<Void, Never>] = [:]
+    private var processRunners: [TaskScope: ProcessRunner] = [:]
 
     init() {
         binaryServerAddress = UserDefaults.standard.string(forKey: Self.binaryServerAddressKey)
@@ -199,6 +200,74 @@ final class AppModel: ObservableObject {
         binaryComponents.reduce(0) { $0 + $1.versions.count }
     }
 
+    // MARK: - Scoped Task & Log Management
+
+    func selectedTaskID(for scope: TaskScope) -> UUID? {
+        switch scope {
+        case .app:
+            return selectedAppTaskID
+        case .component(let name):
+            return selectedComponentTaskIDs[name]
+        }
+    }
+
+    func selectTask(_ id: UUID, for scope: TaskScope) {
+        switch scope {
+        case .app:
+            selectedAppTaskID = id
+        case .component(let name):
+            selectedComponentTaskIDs[name] = id
+        }
+    }
+
+    func selectedTask(for scope: TaskScope) -> TaskRecord? {
+        if let id = selectedTaskID(for: scope), let task = taskHistory.record(id: id), task.scope == scope {
+            return task
+        }
+        return taskHistory.records(for: scope).last
+    }
+
+    func taskRecords(for scope: TaskScope) -> [TaskRecord] {
+        taskHistory.records(for: scope)
+    }
+
+    func isBusy(for scope: TaskScope) -> Bool {
+        taskHistory.isBusy(for: scope)
+    }
+
+    func activeTaskTitle(for scope: TaskScope) -> String? {
+        taskHistory.activeTask(for: scope)?.title
+    }
+
+    func log(for scope: TaskScope, mode: LogFilterMode = .all, query: String = "") -> String {
+        guard let task = selectedTask(for: scope) else { return "" }
+        return task.filteredLog(mode: mode, query: query)
+    }
+
+    func clearLog(for scope: TaskScope) {
+        guard !isBusy(for: scope) else { return }
+        taskHistory.clearFinishedRecords(for: scope)
+        switch scope {
+        case .app:
+            selectedAppTaskID = nil
+        case .component(let name):
+            selectedComponentTaskIDs[name] = nil
+        }
+    }
+
+    func cancelTask(for scope: TaskScope) {
+        guard let taskID = taskHistory.activeTask(for: scope)?.id else { return }
+        do {
+            try taskHistory.requestCancellation(taskID)
+        } catch {
+            alertMessage = error.localizedDescription
+            return
+        }
+        processRunners[scope]?.cancel()
+        executionTasks[scope]?.cancel()
+    }
+
+    // Legacy compatibility accessors (defaulting to App scope)
     var isRunning: Bool {
         taskHistory.isBusy
     }
@@ -207,16 +276,28 @@ final class AppModel: ObservableObject {
         taskHistory.activeTask?.title
     }
 
+    var selectedTaskID: UUID? {
+        selectedAppTaskID
+    }
+
     var selectedTask: TaskRecord? {
-        if let selectedTaskID, let task = taskHistory.record(id: selectedTaskID) {
-            return task
-        }
-        return taskHistory.records.last
+        selectedTask(for: .app)
     }
 
     var log: String {
-        guard let task = selectedTask else { return "" }
-        return task.filteredLog(mode: logFilterMode, query: logSearchQuery)
+        log(for: .app, mode: logFilterMode, query: logSearchQuery)
+    }
+
+    func selectTask(_ id: UUID) {
+        selectTask(id, for: .app)
+    }
+
+    func clearLog() {
+        clearLog(for: .app)
+    }
+
+    func cancelTask() {
+        cancelTask(for: .app)
     }
 
     var filteredConfigEntries: [ComponentConfigEntry] {
@@ -571,6 +652,7 @@ final class AppModel: ObservableObject {
 
     func switchComponentExampleDepMode(_ depName: String, to mode: String) {
         guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return }
+        let compName = selectedComponentInfo?.name ?? ""
         if var table = componentConfigTable,
            let idx = table.components.firstIndex(where: { $0.name == depName }) {
             table.components[idx].mode = mode
@@ -581,11 +663,12 @@ final class AppModel: ObservableObject {
         if autoInstallComponentExampleAfterSwitch {
             commands.append(BinCommandBuilder.install())
         }
-        run(commands, in: exampleDir, logDestination: .componentWindow)
+        run(commands, in: exampleDir, scope: .component(name: compName))
     }
 
     func switchAllComponentExampleDeps(to mode: String) {
         guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return }
+        let compName = selectedComponentInfo?.name ?? ""
         if var table = componentConfigTable {
             for idx in table.components.indices {
                 if mode == "local" && !table.components[idx].supportsLocal { continue }
@@ -599,25 +682,27 @@ final class AppModel: ObservableObject {
         if autoInstallComponentExampleAfterSwitch {
             commands.append(BinCommandBuilder.install())
         }
-        run(commands, in: exampleDir, logDestination: .componentWindow)
+        run(commands, in: exampleDir, scope: .component(name: compName))
     }
 
-    func installComponentExampleDependencies() {
-        guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else {
+    func installComponentExampleDependencies(for componentName: String? = nil) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let exampleDir = info?.exampleDirectoryURL else {
             alertMessage = "当前组件没有 Example 工程目录"
             return
         }
         guard saveComponentExampleConfigTable() else { return }
-        run([BinCommandBuilder.install()], in: exampleDir, logDestination: .componentWindow)
+        run([BinCommandBuilder.install()], in: exampleDir, scope: .component(name: info?.name ?? ""))
     }
 
-    func updateComponentExampleDependencies() {
-        guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else {
+    func updateComponentExampleDependencies(for componentName: String? = nil) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let exampleDir = info?.exampleDirectoryURL else {
             alertMessage = "当前组件没有 Example 工程目录"
             return
         }
         guard saveComponentExampleConfigTable() else { return }
-        run([BinCommandBuilder.update()], in: exampleDir, logDestination: .componentWindow)
+        run([BinCommandBuilder.update()], in: exampleDir, scope: .component(name: info?.name ?? ""))
     }
 
     // MARK: - Component Versioning & Publishing
@@ -741,7 +826,7 @@ final class AppModel: ObservableObject {
 
     func runRepoUpdate(all: Bool = false) {
         guard let appDir = requireAppDirectory() else { return }
-        run([BinCommandBuilder.repoUpdate(all: all)], in: appDir, logDestination: .appWindow)
+        run([BinCommandBuilder.repoUpdate(all: all)], in: appDir, scope: .app)
     }
 
     func cleanSelectedComponentCache(andInstall: Bool = false) {
@@ -765,7 +850,7 @@ final class AppModel: ObservableObject {
 
     func runCleanCocoaPodsCache() {
         guard let appDir = requireAppDirectory() else { return }
-        run([BinCommandBuilder.cleanCocoaPodsCache()], in: appDir, logDestination: .appWindow)
+        run([BinCommandBuilder.cleanCocoaPodsCache()], in: appDir, scope: .app)
     }
 
     func cleanDerivedData() {
@@ -840,8 +925,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func runComponentUnitTest() {
-        guard let info = selectedComponentInfo, let exampleDir = info.exampleDirectoryURL else {
+    func runComponentUnitTest(for componentName: String? = nil) {
+        let targetInfo = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let info = targetInfo, let exampleDir = info.exampleDirectoryURL else {
             alertMessage = "当前组件未包含 Example 工程"
             return
         }
@@ -850,7 +936,7 @@ final class AppModel: ObservableObject {
             return
         }
         let scheme = WorkspaceOpener.resolveTestScheme(for: info.name, in: wsOrProj)
-        run([BinCommandBuilder.testComponent(workspaceOrProjectURL: wsOrProj, scheme: scheme)], in: exampleDir, logDestination: .componentWindow)
+        run([BinCommandBuilder.testComponent(workspaceOrProjectURL: wsOrProj, scheme: scheme)], in: exampleDir, scope: .component(name: info.name))
     }
 
     func exportCurrentConfigTable(to fileURL: URL) {
@@ -976,7 +1062,7 @@ final class AppModel: ObservableObject {
                     podspecFileName: info.podspecURL.lastPathComponent,
                     version: targetVersion
                 )
-                run([commitCommand], in: info.repositoryURL, logDestination: .componentWindow)
+                run([commitCommand], in: info.repositoryURL, scope: .component(name: info.name))
             }
         } catch {
             alertMessage = error.localizedDescription
@@ -1049,19 +1135,19 @@ final class AppModel: ObservableObject {
     func runInstall() {
         guard let appDir = requireAppDirectory() else { return }
         _ = saveConfigTable()
-        run([BinCommandBuilder.install()], in: appDir, logDestination: .appWindow)
+        run([BinCommandBuilder.install()], in: appDir, scope: .app)
     }
 
     func runUpdate() {
         guard let appDir = requireAppDirectory() else { return }
         _ = saveConfigTable()
-        run([BinCommandBuilder.update()], in: appDir, logDestination: .appWindow)
+        run([BinCommandBuilder.update()], in: appDir, scope: .app)
     }
 
     func runStatus() {
         guard let appDir = requireAppDirectory() else { return }
         _ = saveConfigTable()
-        run([BinCommandBuilder.status()], in: appDir, logDestination: .appWindow)
+        run([BinCommandBuilder.status()], in: appDir, scope: .app)
     }
 
     func runPolicySync() {
@@ -1085,7 +1171,7 @@ final class AppModel: ObservableObject {
             project: projectKey,
             revision: managedPolicyRevision.trimmingCharacters(in: .whitespacesAndNewlines),
             server: binaryServerAddress
-        )], in: appDir, logDestination: .appWindow)
+        )], in: appDir, scope: .app)
     }
 
     func switchMode(_ dependency: ManagedDependency, to mode: String) {
@@ -1104,7 +1190,7 @@ final class AppModel: ObservableObject {
         if autoInstallAfterSwitch {
             commands.append(BinCommandBuilder.install())
         }
-        run(commands, in: appDir, logDestination: .appWindow)
+        run(commands, in: appDir, scope: .app)
     }
 
     func switchAllComponents(to mode: String) {
@@ -1122,7 +1208,7 @@ final class AppModel: ObservableObject {
         if autoInstallAfterSwitch {
             commands.append(BinCommandBuilder.install())
         }
-        run(commands, in: appDir, logDestination: .appWindow)
+        run(commands, in: appDir, scope: .app)
     }
 
     func resetComponentModes() {
@@ -1139,14 +1225,16 @@ final class AppModel: ObservableObject {
         if autoInstallAfterSwitch {
             commands.append(BinCommandBuilder.install())
         }
-        run(commands, in: appDir, logDestination: .appWindow)
+        run(commands, in: appDir, scope: .app)
     }
 
-    func runArchive() {
-        guard let podspec = selectedPodspec ?? selectedComponentInfo?.podspecURL else {
+    func runArchive(for componentName: String? = nil) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let podspec = info?.podspecURL ?? selectedPodspec else {
             alertMessage = "请先选择一个 podspec"
             return
         }
+        let compName = info?.name ?? podspec.deletingPathExtension().lastPathComponent
         let workingDir = podspec.standardizedFileURL.deletingLastPathComponent()
         run([BinCommandBuilder.archive(
             podspecURL: podspec,
@@ -1154,29 +1242,30 @@ final class AppModel: ObservableObject {
             configuration: configuration,
             buildMissingDependencies: buildMissingDependencies,
             keepIntermediates: keepIntermediates
-        )], in: workingDir, logDestination: .componentWindow)
+        )], in: workingDir, scope: .component(name: compName))
     }
 
-    func runPublishDryRun() {
-        executePublish(dryRun: true)
+    func runPublishDryRun(for componentName: String? = nil) {
+        executePublish(dryRun: true, for: componentName)
     }
 
-    func runPublish() {
-        executePublish(dryRun: publishDryRun)
+    func runPublish(for componentName: String? = nil) {
+        executePublish(dryRun: publishDryRun, for: componentName)
     }
 
-    func runOfficialPublish() {
-        executePublish(dryRun: false)
+    func runOfficialPublish(for componentName: String? = nil) {
+        executePublish(dryRun: false, for: componentName)
     }
 
-    private func executePublish(dryRun: Bool) {
-        guard let podspec = selectedPodspec ?? selectedComponentInfo?.podspecURL else {
+    private func executePublish(dryRun: Bool, for componentName: String? = nil) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let podspec = info?.podspecURL ?? selectedPodspec else {
             alertMessage = "请先选择一个 podspec"
             return
         }
         let workingDir = podspec.standardizedFileURL.deletingLastPathComponent()
-        let currentVer = editingComponentVersion.isEmpty ? (selectedComponentInfo?.version ?? "") : editingComponentVersion
-        let compName = selectedComponentInfo?.name ?? podspec.deletingPathExtension().lastPathComponent
+        let currentVer = editingComponentVersion.isEmpty ? (info?.version ?? "") : editingComponentVersion
+        let compName = info?.name ?? podspec.deletingPathExtension().lastPathComponent
         let isPrerelease = currentVer.contains("-") || currentVer.localizedCaseInsensitiveContains("beta")
 
         var commands: [CommandSpec] = []
@@ -1213,31 +1302,9 @@ final class AppModel: ObservableObject {
         run(
             commands,
             in: workingDir,
-            logDestination: .componentWindow,
+            scope: .component(name: compName),
             refreshBinaryServerOnCompletion: !dryRun
         )
-    }
-
-    func cancelTask() {
-        guard let taskID = taskHistory.activeTask?.id else { return }
-        do {
-            try taskHistory.requestCancellation(taskID)
-        } catch {
-            alertMessage = error.localizedDescription
-            return
-        }
-        processRunner.cancel()
-        executionTask?.cancel()
-    }
-
-    func clearLog() {
-        guard !isRunning else { return }
-        taskHistory.clearFinishedRecords()
-        selectedTaskID = nil
-    }
-
-    func selectTask(_ id: UUID) {
-        selectedTaskID = id
     }
 
     private func requireAppDirectory() -> URL? {
@@ -1251,7 +1318,7 @@ final class AppModel: ObservableObject {
     private func run(
         _ commands: [CommandSpec],
         in workingDirectory: URL,
-        logDestination: LogDestination,
+        scope: TaskScope,
         refreshBinaryServerOnCompletion: Bool = false
     ) {
         guard project != nil else {
@@ -1259,8 +1326,8 @@ final class AppModel: ObservableObject {
             return
         }
         guard let first = commands.first else { return }
-        guard !isRunning else {
-            alertMessage = "已有任务正在执行"
+        guard !isBusy(for: scope) else {
+            alertMessage = "该工作区已有任务正在执行"
             return
         }
 
@@ -1270,6 +1337,7 @@ final class AppModel: ObservableObject {
         let taskID: UUID
         do {
             taskID = try taskHistory.enqueue(
+                scope: scope,
                 kind: first.taskKind,
                 title: combinedTitle,
                 workspaceURL: workingDirectory,
@@ -1280,15 +1348,18 @@ final class AppModel: ObservableObject {
             alertMessage = error.localizedDescription
             return
         }
-        selectedTaskID = taskID
-        switch logDestination {
-        case .appWindow:
-            selection = .logs
-        case .componentWindow:
-            componentSelection = .logs
+        selectTask(taskID, for: scope)
+        switch scope {
+        case .app:
+            isAppLogDrawerExpanded = true
+        case .component:
+            isComponentLogDrawerExpanded = true
         }
 
-        executionTask = Task {
+        let runner = ProcessRunner()
+        processRunners[scope] = runner
+
+        let task = Task {
             var finalExitCode: Int32 = 0
             do {
                 let loaded = try await Task.detached(priority: .userInitiated) {
@@ -1309,7 +1380,7 @@ final class AppModel: ObservableObject {
                             to: taskID
                         )
                     }
-                    let events = try processRunner.events(
+                    let events = try runner.events(
                         for: command,
                         workingDirectory: workingDirectory,
                         environment: env
@@ -1333,13 +1404,15 @@ final class AppModel: ObservableObject {
                 alertMessage = error.localizedDescription
                 try? taskHistory.fail(taskID, summary: error.localizedDescription)
             }
-            executionTask = nil
+            processRunners[scope] = nil
+            executionTasks[scope] = nil
             refreshProject()
             refreshLatestArtifactReport()
             if refreshBinaryServerOnCompletion && finalExitCode == 0 {
                 refreshBinaryServer()
             }
         }
+        executionTasks[scope] = task
     }
 
     private static func injectLocalInfraEnvironment(

@@ -108,8 +108,58 @@ public enum LogFilterMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+public enum TaskScope: Codable, Hashable, Sendable {
+    case app
+    case component(name: String)
+
+    public var isApp: Bool {
+        if case .app = self { return true }
+        return false
+    }
+
+    public var componentName: String? {
+        if case .component(let name) = self { return name }
+        return nil
+    }
+
+    public var title: String {
+        switch self {
+        case .app: return "App"
+        case .component(let name): return name
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case name
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .app:
+            try container.encode("app", forKey: .type)
+        case .component(let name):
+            try container.encode("component", forKey: .type)
+            try container.encode(name, forKey: .name)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        if type == "component" {
+            let name = try container.decode(String.self, forKey: .name)
+            self = .component(name: name)
+        } else {
+            self = .app
+        }
+    }
+}
+
 public struct TaskRecord: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
+    public let scope: TaskScope
     public let kind: TaskKind
     public let title: String
     public let workspaceURL: URL?
@@ -124,6 +174,7 @@ public struct TaskRecord: Codable, Equatable, Sendable, Identifiable {
 
     public init(
         id: UUID = UUID(),
+        scope: TaskScope = .app,
         kind: TaskKind,
         title: String? = nil,
         workspaceURL: URL? = nil,
@@ -131,6 +182,7 @@ public struct TaskRecord: Codable, Equatable, Sendable, Identifiable {
         createdAt: Date = Date()
     ) {
         self.id = id
+        self.scope = scope
         self.kind = kind
         self.title = title ?? kind.title
         self.workspaceURL = workspaceURL
@@ -138,6 +190,27 @@ public struct TaskRecord: Codable, Equatable, Sendable, Identifiable {
         self.state = .queued
         self.createdAt = createdAt
         self.events = []
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, scope, kind, title, workspaceURL, displayCommand, state, createdAt, startedAt, finishedAt, exitCode, failureSummary, events
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.scope = try container.decodeIfPresent(TaskScope.self, forKey: .scope) ?? .app
+        self.kind = try container.decode(TaskKind.self, forKey: .kind)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.workspaceURL = try container.decodeIfPresent(URL.self, forKey: .workspaceURL)
+        self.displayCommand = try container.decodeIfPresent(String.self, forKey: .displayCommand)
+        self.state = try container.decode(TaskState.self, forKey: .state)
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+        self.startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
+        self.finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
+        self.exitCode = try container.decodeIfPresent(Int32.self, forKey: .exitCode)
+        self.failureSummary = try container.decodeIfPresent(String.self, forKey: .failureSummary)
+        self.events = try container.decode([TaskEvent].self, forKey: .events)
     }
 
     public var renderedLog: String {
@@ -261,21 +334,35 @@ public struct TaskHistory: Equatable, Sendable {
         activeTask != nil
     }
 
+    public func activeTask(for scope: TaskScope) -> TaskRecord? {
+        records.first { $0.scope == scope && !$0.state.isTerminal }
+    }
+
+    public func isBusy(for scope: TaskScope) -> Bool {
+        activeTask(for: scope) != nil
+    }
+
+    public func records(for scope: TaskScope) -> [TaskRecord] {
+        records.filter { $0.scope == scope }
+    }
+
     public func record(id: UUID) -> TaskRecord? {
         records.first { $0.id == id }
     }
 
     @discardableResult
     public mutating func enqueue(
+        scope: TaskScope = .app,
         kind: TaskKind,
         title: String? = nil,
         workspaceURL: URL? = nil,
         displayCommand: String? = nil,
         createdAt: Date = Date()
     ) throws -> UUID {
-        guard !isBusy else { throw TaskHistoryError.activeTaskExists }
+        guard !isBusy(for: scope) else { throw TaskHistoryError.activeTaskExists }
 
         let record = TaskRecord(
+            scope: scope,
             kind: kind,
             title: title,
             workspaceURL: workspaceURL,
@@ -346,6 +433,11 @@ public struct TaskHistory: Equatable, Sendable {
 
     public mutating func clearFinishedRecords() {
         records.removeAll { $0.state.isTerminal }
+        saveToDisk()
+    }
+
+    public mutating func clearFinishedRecords(for scope: TaskScope) {
+        records.removeAll { $0.scope == scope && $0.state.isTerminal }
         saveToDisk()
     }
 

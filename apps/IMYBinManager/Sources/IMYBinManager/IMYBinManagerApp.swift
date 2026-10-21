@@ -29,11 +29,29 @@ struct IMYBinManagerApp: App {
                     openWindow(id: "component-manager")
                 }
                 .keyboardShortcut("2", modifiers: [.command, .shift])
+
+                if !model.componentPodspecs.isEmpty {
+                    Divider()
+                    Menu("打开独立组件窗口") {
+                        ForEach(model.componentPodspecs) { spec in
+                            Button("打开 \(spec.name) 窗口") {
+                                openWindow(id: "component-window", value: spec.name)
+                            }
+                        }
+                    }
+                }
             }
         }
 
+        WindowGroup("IMY Bin — 组件工作台", id: "component-window", for: String.self) { $componentName in
+            ComponentWorkspaceView(boundComponentName: componentName)
+                .environmentObject(model)
+                .frame(minWidth: 980, minHeight: 680)
+        }
+        .windowStyle(.titleBar)
+
         Window("IMY Bin — 组件管理与发布工作台", id: "component-manager") {
-            ComponentWorkspaceView()
+            ComponentWorkspaceView(boundComponentName: nil)
                 .environmentObject(model)
                 .frame(minWidth: 980, minHeight: 680)
         }
@@ -65,6 +83,16 @@ struct IMYBinManagerApp: App {
 
                 Button("打开组件管理与发布窗口 (⇧⌘2)") {
                     openWindow(id: "component-manager")
+                }
+
+                if !model.componentPodspecs.isEmpty {
+                    Menu("打开独立组件窗口") {
+                        ForEach(model.componentPodspecs) { spec in
+                            Button("打开 \(spec.name) 窗口") {
+                                openWindow(id: "component-window", value: spec.name)
+                            }
+                        }
+                    }
                 }
 
                 Divider()

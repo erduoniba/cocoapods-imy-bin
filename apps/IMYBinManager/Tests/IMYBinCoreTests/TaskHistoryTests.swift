@@ -66,3 +66,73 @@ import Testing
     #expect(history.record(id: second) != nil)
     #expect(history.record(id: third) != nil)
 }
+
+@Test func taskHistoryIsolatesLogsBetweenAppAndComponents() throws {
+    var history = TaskHistory(maximumRecords: 10)
+    let appTask = try history.enqueue(
+        scope: .app,
+        kind: .install,
+        title: "App pod install"
+    )
+    try history.start(appTask)
+    try history.appendOutput("Installing Podfile...\n", to: appTask)
+    try history.finish(appTask, exitCode: 0)
+
+    let compATask = try history.enqueue(
+        scope: .component(name: "HDDynamicPod"),
+        kind: .archive,
+        title: "Archive HDDynamicPod"
+    )
+    try history.start(compATask)
+    try history.appendOutput("Archiving HDDynamicPod.podspec...\n", to: compATask)
+    try history.finish(compATask, exitCode: 0)
+
+    let compBTask = try history.enqueue(
+        scope: .component(name: "HDStaticPod"),
+        kind: .publish,
+        title: "Publish HDStaticPod"
+    )
+    try history.start(compBTask)
+    try history.appendOutput("Pushing HDStaticPod.podspec to repo...\n", to: compBTask)
+    try history.finish(compBTask, exitCode: 0)
+
+    let appRecords = history.records(for: .app)
+    #expect(appRecords.count == 1)
+    #expect(appRecords.first?.title == "App pod install")
+    #expect(appRecords.first?.scope == .app)
+
+    let compARecords = history.records(for: .component(name: "HDDynamicPod"))
+    #expect(compARecords.count == 1)
+    #expect(compARecords.first?.title == "Archive HDDynamicPod")
+    #expect(compARecords.first?.scope == .component(name: "HDDynamicPod"))
+
+    let compBRecords = history.records(for: .component(name: "HDStaticPod"))
+    #expect(compBRecords.count == 1)
+    #expect(compBRecords.first?.title == "Publish HDStaticPod")
+    #expect(compBRecords.first?.scope == .component(name: "HDStaticPod"))
+
+    // Clear only Component A's finished records
+    history.clearFinishedRecords(for: .component(name: "HDDynamicPod"))
+    #expect(history.records(for: .component(name: "HDDynamicPod")).isEmpty)
+    #expect(history.records(for: .app).count == 1)
+    #expect(history.records(for: .component(name: "HDStaticPod")).count == 1)
+}
+
+@Test func taskScopeCodablePreservesScopeAndFallbacksGracefully() throws {
+    let appRecord = TaskRecord(scope: .app, kind: .install, title: "App Install")
+    let compRecord = TaskRecord(scope: .component(name: "ComponentA"), kind: .archive, title: "Archive A")
+
+    let encoder = JSONEncoder()
+    let decoder = JSONDecoder()
+
+    let appData = try encoder.encode(appRecord)
+    let decodedApp = try decoder.decode(TaskRecord.self, from: appData)
+    #expect(decodedApp.scope == .app)
+    #expect(decodedApp.title == "App Install")
+
+    let compData = try encoder.encode(compRecord)
+    let decodedComp = try decoder.decode(TaskRecord.self, from: compData)
+    #expect(decodedComp.scope == .component(name: "ComponentA"))
+    #expect(decodedComp.scope.componentName == "ComponentA")
+    #expect(decodedComp.title == "Archive A")
+}
