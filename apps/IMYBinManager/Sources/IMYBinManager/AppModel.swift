@@ -651,7 +651,6 @@ final class AppModel: ObservableObject {
     }
 
     func switchComponentExampleDepMode(_ depName: String, to mode: String) {
-        guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return }
         let compName = selectedComponentInfo?.name ?? ""
         if var table = componentConfigTable,
            let idx = table.components.firstIndex(where: { $0.name == depName }) {
@@ -659,15 +658,13 @@ final class AppModel: ObservableObject {
             componentConfigTable = table
             guard saveComponentExampleConfigTable() else { return }
         }
-        var commands = [BinCommandBuilder.switchMode(component: depName, mode: mode)]
         if autoInstallComponentExampleAfterSwitch {
-            commands.append(BinCommandBuilder.install())
+            guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return }
+            run([BinCommandBuilder.install()], in: exampleDir, scope: .component(name: compName))
         }
-        run(commands, in: exampleDir, scope: .component(name: compName))
     }
 
     func switchAllComponentExampleDeps(to mode: String) {
-        guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return }
         let compName = selectedComponentInfo?.name ?? ""
         if var table = componentConfigTable {
             for idx in table.components.indices {
@@ -678,11 +675,10 @@ final class AppModel: ObservableObject {
             componentConfigTable = table
             guard saveComponentExampleConfigTable() else { return }
         }
-        var commands = [BinCommandBuilder.switchAll(mode: mode)]
         if autoInstallComponentExampleAfterSwitch {
-            commands.append(BinCommandBuilder.install())
+            guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return }
+            run([BinCommandBuilder.install()], in: exampleDir, scope: .component(name: compName))
         }
-        run(commands, in: exampleDir, scope: .component(name: compName))
     }
 
     func installComponentExampleDependencies(for componentName: String? = nil) {
@@ -1179,22 +1175,19 @@ final class AppModel: ObservableObject {
     }
 
     func switchLocalComponent(_ componentName: String, to mode: String) {
-        guard let appDir = requireAppDirectory() else { return }
         if var table = configTable,
            let idx = table.components.firstIndex(where: { $0.name == componentName }) {
             table.components[idx].mode = mode
             configTable = table
             _ = saveConfigTable()
         }
-        var commands = [BinCommandBuilder.switchMode(component: componentName, mode: mode)]
         if autoInstallAfterSwitch {
-            commands.append(BinCommandBuilder.install())
+            guard let appDir = requireAppDirectory() else { return }
+            run([BinCommandBuilder.install()], in: appDir, scope: .app)
         }
-        run(commands, in: appDir, scope: .app)
     }
 
     func switchAllComponents(to mode: String) {
-        guard let appDir = requireAppDirectory() else { return }
         if var table = configTable {
             for idx in table.components.indices {
                 if mode == "local" && !table.components[idx].supportsLocal { continue }
@@ -1204,15 +1197,13 @@ final class AppModel: ObservableObject {
             configTable = table
             _ = saveConfigTable()
         }
-        var commands = [BinCommandBuilder.switchAll(mode: mode)]
         if autoInstallAfterSwitch {
-            commands.append(BinCommandBuilder.install())
+            guard let appDir = requireAppDirectory() else { return }
+            run([BinCommandBuilder.install()], in: appDir, scope: .app)
         }
-        run(commands, in: appDir, scope: .app)
     }
 
     func resetComponentModes() {
-        guard let appDir = requireAppDirectory() else { return }
         if var table = configTable {
             for idx in table.components.indices {
                 table.components[idx].mode = "binary"
@@ -1221,11 +1212,10 @@ final class AppModel: ObservableObject {
             configTable = table
             _ = saveConfigTable()
         }
-        var commands = [BinCommandBuilder.resetModes()]
         if autoInstallAfterSwitch {
-            commands.append(BinCommandBuilder.install())
+            guard let appDir = requireAppDirectory() else { return }
+            run([BinCommandBuilder.install()], in: appDir, scope: .app)
         }
-        run(commands, in: appDir, scope: .app)
     }
 
     func runArchive(for componentName: String? = nil) {
