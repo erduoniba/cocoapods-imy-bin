@@ -34,19 +34,29 @@ struct ContentView: View {
             ToolboxSheetView()
                 .frame(minWidth: 720, minHeight: 540)
         }
-        .alert(model.alertTitle, isPresented: Binding(
-            get: { model.alertMessage != nil },
-            set: { if !$0 {
-                model.alertMessage = nil
-                model.alertTitle = "提示"
-            }}
-        )) {
-            Button("好", role: .cancel) {
-                model.alertMessage = nil
-                model.alertTitle = "提示"
+        .alert(
+            model.appAlert?.title ?? "提示",
+            isPresented: Binding(
+                get: { model.appAlert != nil },
+                set: { if !$0 { model.appAlert = nil } }
+            ),
+            presenting: model.appAlert
+        ) { alert in
+            if alert.isError {
+                Button("查看日志") {
+                    model.isAppLogDrawerExpanded = true
+                    model.appAlert = nil
+                }
+                Button("关闭", role: .cancel) {
+                    model.appAlert = nil
+                }
+            } else {
+                Button("确定", role: .cancel) {
+                    model.appAlert = nil
+                }
             }
-        } message: {
-            Text(model.alertMessage ?? "")
+        } message: { alert in
+            Text(alert.message)
         }
     }
 }
@@ -754,7 +764,7 @@ private struct ConsoleDrawer: View {
                         TextField("搜索日志…", text: $model.logSearchQuery)
                             .textFieldStyle(.roundedBorder)
                             .controlSize(.small)
-                            .frame(width: 130)
+                            .frame(minWidth: 130, idealWidth: 160, maxWidth: 220)
 
                         Picker("", selection: $model.logFilterMode) {
                             Text("全部日志").tag(LogFilterMode.all)
@@ -897,6 +907,44 @@ struct ComponentWorkspaceView: View {
             // 2. 主体：发版核心卡片 + 依赖关联卡片
             ScrollView {
                 VStack(spacing: 16) {
+                    // 常驻可主动关闭的工作台执行状态提示条
+                    if let banner = model.componentTaskBanner(for: activeComponentName) {
+                        HStack(spacing: 10) {
+                            Image(systemName: banner.isError ? "xmark.circle.fill" : "checkmark.circle.fill")
+                                .foregroundStyle(banner.isError ? .red : .green)
+                                .font(.system(size: 16))
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(banner.title)
+                                    .font(.system(size: 13.5, weight: .bold))
+                                Text(banner.message)
+                                    .font(.system(size: 12.5))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            Button {
+                                model.dismissComponentTaskBanner(for: activeComponentName)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(4)
+                            }
+                            .buttonStyle(.plain)
+                            .help("关闭此提示")
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(banner.isError ? Color.red.opacity(0.12) : Color.green.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(banner.isError ? Color.red.opacity(0.3) : Color.green.opacity(0.3), lineWidth: 1)
+                        )
+                    }
+
                     if let info = activeComponentInfo {
                         // 核心卡片 1：组件版本与发布
                         ComponentPublishCard(info: info)
@@ -937,19 +985,29 @@ struct ComponentWorkspaceView: View {
                 model.selectedPodspec = info.podspecURL
             }
         }
-        .alert(model.alertTitle, isPresented: Binding(
-            get: { model.alertMessage != nil },
-            set: { if !$0 {
-                model.alertMessage = nil
-                model.alertTitle = "提示"
-            }}
-        )) {
-            Button("好", role: .cancel) {
-                model.alertMessage = nil
-                model.alertTitle = "提示"
+        .alert(
+            model.componentAlert(for: activeComponentName)?.title ?? "提示",
+            isPresented: Binding(
+                get: { model.componentAlert(for: activeComponentName) != nil },
+                set: { if !$0 { model.dismissComponentAlert(for: activeComponentName) } }
+            ),
+            presenting: model.componentAlert(for: activeComponentName)
+        ) { alert in
+            if alert.isError {
+                Button("查看日志") {
+                    model.isComponentLogDrawerExpanded = true
+                    model.dismissComponentAlert(for: activeComponentName)
+                }
+                Button("关闭", role: .cancel) {
+                    model.dismissComponentAlert(for: activeComponentName)
+                }
+            } else {
+                Button("确定", role: .cancel) {
+                    model.dismissComponentAlert(for: activeComponentName)
+                }
             }
-        } message: {
-            Text(model.alertMessage ?? "")
+        } message: { alert in
+            Text(alert.message)
         }
     }
 }
@@ -1100,7 +1158,7 @@ private struct ComponentPublishCard: View {
                 TextField("新版本", text: $model.editingComponentVersion)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .frame(width: 110)
+                    .frame(minWidth: 140, idealWidth: 160, maxWidth: 190)
 
                 Button("+Patch") {
                     model.bumpEditingVersion(.patch)
@@ -1265,12 +1323,12 @@ private struct ComponentDependenciesCard: View {
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.regular)
                     .font(.system(size: 13.5))
-                    .frame(width: 200)
+                    .frame(minWidth: 220, idealWidth: 280, maxWidth: .infinity)
                 TextField("版本约束 (如 ~> 0.1.0)", text: $newDepVersion)
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.regular)
                     .font(.system(size: 13.5))
-                    .frame(width: 160)
+                    .frame(minWidth: 160, idealWidth: 180, maxWidth: 220)
                 Button("添加依赖") {
                     model.addOrUpdateSelectedPodspecDependency(name: newDepName, versionRequirement: newDepVersion)
                     newDepName = ""

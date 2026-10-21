@@ -2,6 +2,19 @@ import AppKit
 import Foundation
 import IMYBinCore
 
+public struct WorkspaceAlert: Identifiable, Sendable {
+    public let id = UUID()
+    public var title: String
+    public var message: String
+    public var isError: Bool
+
+    public init(title: String, message: String, isError: Bool = false) {
+        self.title = title
+        self.message = message
+        self.isError = isError
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     enum Page: String, CaseIterable, Identifiable {
@@ -172,12 +185,64 @@ final class AppModel: ObservableObject {
     @Published private(set) var isRefreshingBinaryServer = false
     @Published private(set) var binaryServerError: String?
     @Published private(set) var binaryServerCheckedAt: Date?
+
+    // 独立分工作台弹窗与提示状态
+    @Published var appAlert: WorkspaceAlert?
+    @Published var componentAlerts: [String: WorkspaceAlert] = [:]
+
+    // 每个工作台当前常驻可关闭的执行状态条 (Dismissible Banner)
+    @Published var appTaskBanner: WorkspaceAlert?
+    @Published var componentTaskBanners: [String: WorkspaceAlert] = [:]
+
     @Published var alertTitle: String = "提示"
-    @Published var alertMessage: String?
+    @Published var alertMessage: String? {
+        didSet {
+            guard let alertMessage else { return }
+            let alert = WorkspaceAlert(title: alertTitle, message: alertMessage, isError: false)
+            if let activeComp = selectedComponentInfo?.name {
+                componentAlerts[activeComp] = alert
+                componentTaskBanners[activeComp] = alert
+            } else {
+                appAlert = alert
+                appTaskBanner = alert
+            }
+        }
+    }
 
     func showAlert(title: String, message: String) {
         alertTitle = title
         alertMessage = message
+    }
+
+    func showAlert(for scope: TaskScope, title: String, message: String, isError: Bool = false) {
+        let alert = WorkspaceAlert(title: title, message: message, isError: isError)
+        switch scope {
+        case .app:
+            appAlert = alert
+            appTaskBanner = alert
+        case .component(let name):
+            let targetKey = name.isEmpty ? (selectedComponentInfo?.name ?? "") : name
+            componentAlerts[targetKey] = alert
+            componentTaskBanners[targetKey] = alert
+        }
+    }
+
+    func componentAlert(for name: String) -> WorkspaceAlert? {
+        componentAlerts[name] ?? componentAlerts[""]
+    }
+
+    func dismissComponentAlert(for name: String) {
+        componentAlerts.removeValue(forKey: name)
+        componentAlerts.removeValue(forKey: "")
+    }
+
+    func componentTaskBanner(for name: String) -> WorkspaceAlert? {
+        componentTaskBanners[name] ?? componentTaskBanners[""]
+    }
+
+    func dismissComponentTaskBanner(for name: String) {
+        componentTaskBanners.removeValue(forKey: name)
+        componentTaskBanners.removeValue(forKey: "")
     }
 
     func playNotificationSound(success: Bool) {
@@ -1505,36 +1570,48 @@ final class AppModel: ObservableObject {
                     if commands.contains(where: { $0.taskKind == .publish }) {
                         if commands.contains(where: { $0.displayCommand.contains("--dry-run") }) {
                             showAlert(
+                                for: scope,
                                 title: "预检通过",
-                                message: "组件 \(compName.isEmpty ? "目标组件" : compName) 发布预检 (--dry-run) 执行通过！"
+                                message: "组件 \(compName.isEmpty ? "目标组件" : compName) 发布预检 (--dry-run) 执行通过！",
+                                isError: false
                             )
                         } else {
                             let ver = localPodspecInfo(named: compName)?.version ?? ""
                             let verSuffix = ver.isEmpty ? "" : " (v\(ver))"
                             showAlert(
+                                for: scope,
                                 title: "发布成功",
-                                message: "🎉 组件 \(compName.isEmpty ? "目标组件" : compName)\(verSuffix) 二进制发布成功！\n制品已上传至制品库，源码与二进制 Spec 已同步更新。"
+                                message: "🎉 组件 \(compName.isEmpty ? "目标组件" : compName)\(verSuffix) 二进制发布成功！\n制品已上传至制品库，源码与二进制 Spec 已同步更新。",
+                                isError: false
                             )
                         }
                     } else if commands.contains(where: { $0.taskKind == .install }) {
                         showAlert(
+                            for: scope,
                             title: "安装成功",
-                            message: "🎉 CocoaPods 依赖安装成功！已成功同步配置并完成安装。"
+                            message: "🎉 CocoaPods 依赖安装成功！已成功同步配置并完成安装。",
+                            isError: false
                         )
                     } else if commands.contains(where: { $0.taskKind == .archive }) {
                         showAlert(
+                            for: scope,
                             title: "构建成功",
-                            message: "🎉 组件 \(compName.isEmpty ? "目标组件" : compName) 二进制 XCFramework 归档构建完成！"
+                            message: "🎉 组件 \(compName.isEmpty ? "目标组件" : compName) 二进制 XCFramework 归档构建完成！",
+                            isError: false
                         )
                     } else if commands.contains(where: { $0.taskKind == .update }) {
                         showAlert(
+                            for: scope,
                             title: "更新成功",
-                            message: "🎉 CocoaPods 依赖更新成功！"
+                            message: "🎉 CocoaPods 依赖更新成功！",
+                            isError: false
                         )
                     } else {
                         showAlert(
+                            for: scope,
                             title: "执行成功",
-                            message: "任务「\(combinedTitle)」已成功完成。"
+                            message: "任务「\(combinedTitle)」已成功完成。",
+                            isError: false
                         )
                     }
                 } else {
@@ -1546,15 +1623,19 @@ final class AppModel: ObservableObject {
                         isComponentLogDrawerExpanded = true
                     }
                     showAlert(
+                        for: scope,
                         title: "执行失败",
-                        message: "❌ 任务「\(combinedTitle)」执行失败（退出码: \(finalExitCode)）。\n已自动为您展开控制台日志，请检查报错详情。"
+                        message: "❌ 任务「\(combinedTitle)」执行失败（退出码: \(finalExitCode)）。\n已自动为您展开控制台日志，请检查报错详情。",
+                        isError: true
                     )
                 }
             } catch is CancellationError {
                 try? taskHistory.cancel(taskID)
                 showAlert(
+                    for: scope,
                     title: "任务已取消",
-                    message: "已终止任务「\(combinedTitle)」的执行。"
+                    message: "已终止任务「\(combinedTitle)」的执行。",
+                    isError: false
                 )
             } catch {
                 playNotificationSound(success: false)
@@ -1565,8 +1646,10 @@ final class AppModel: ObservableObject {
                     isComponentLogDrawerExpanded = true
                 }
                 showAlert(
+                    for: scope,
                     title: "执行出错",
-                    message: "❌ 任务「\(combinedTitle)」发生错误：\(error.localizedDescription)"
+                    message: "❌ 任务「\(combinedTitle)」发生错误：\(error.localizedDescription)",
+                    isError: true
                 )
                 try? taskHistory.fail(taskID, summary: error.localizedDescription)
             }
