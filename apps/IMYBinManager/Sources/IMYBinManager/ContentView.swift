@@ -511,7 +511,7 @@ private struct ConsoleDrawer: View {
                         .fill(statusColor)
                         .frame(width: 8, height: 8)
                     Text(statusText)
-                        .font(.caption.monospaced())
+                        .font(.system(size: 12.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
 
@@ -763,7 +763,7 @@ private struct ComponentTopBar: View {
             // 组件选择下拉
             Menu {
                 if let bound = boundComponentName, !bound.isEmpty {
-                    Text("当前窗口专属组件：\(bound)").font(.caption)
+                    Text("当前窗口专属组件：\(bound)").font(.system(size: 13, weight: .medium))
                     Divider()
                     ForEach(model.componentPodspecs) { spec in
                         if spec.name != bound {
@@ -790,7 +790,7 @@ private struct ComponentTopBar: View {
                     Image(systemName: "shippingbox.fill")
                         .foregroundStyle(Color.accentColor)
                     Text(activeComponentInfo?.name ?? boundComponentName ?? "选择组件")
-                        .font(.headline)
+                        .font(.system(size: 16, weight: .bold))
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -801,21 +801,21 @@ private struct ComponentTopBar: View {
 
             if let info = activeComponentInfo {
                 Text("v\(info.version)")
-                    .font(.caption.monospaced().bold())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
                     .background(.quaternary)
                     .clipShape(Capsule())
 
                 // 反向影响提示
                 if let report = model.reverseImpactReport, !report.dependentApps.isEmpty {
                     Text("被 \(report.dependentApps.map(\.name).joined(separator: ", ")) 引用")
-                        .font(.caption2)
+                        .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
 
                 // 快捷打开工具
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     Button {
                         if let dir = info.exampleDirectoryURL ?? info.repositoryURL as URL? {
                             _ = WorkspaceOpener.openInXcode(at: dir)
@@ -823,21 +823,21 @@ private struct ComponentTopBar: View {
                     } label: {
                         Label("Xcode", systemImage: "hammer.fill")
                     }
-                    .controlSize(.small)
+                    .controlSize(.regular)
 
                     Button {
                         NSWorkspace.shared.selectFile(info.podspecURL.path, inFileViewerRootedAtPath: "")
                     } label: {
                         Label("Finder", systemImage: "folder")
                     }
-                    .controlSize(.small)
+                    .controlSize(.regular)
 
                     Button {
                         WorkspaceOpener.openInTerminal(at: info.repositoryURL)
                     } label: {
                         Label("终端", systemImage: "terminal")
                     }
-                    .controlSize(.small)
+                    .controlSize(.regular)
                 }
             }
 
@@ -850,6 +850,7 @@ private struct ComponentTopBar: View {
                 Label("App 依赖窗口 (⇧⌘1)", systemImage: "app.badge")
             }
             .buttonStyle(.bordered)
+            .controlSize(.regular)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -869,10 +870,10 @@ private struct ComponentPublishCard: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Label("版本与正式发布", systemImage: "paperplane.fill")
-                    .font(.headline)
+                    .font(.system(size: 16, weight: .bold))
                 Spacer()
                 Text("当前发布环境: \(model.environment.title)")
-                    .font(.caption)
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
             }
 
@@ -880,63 +881,64 @@ private struct ComponentPublishCard: View {
 
             // 版本号与快捷递增
             HStack(spacing: 12) {
-                Text("当前: v\(info.version)").font(.subheadline.bold())
+                Text("当前: v\(info.version)")
+                    .font(.system(size: 14.5, weight: .bold))
 
                 Image(systemName: "arrow.right")
                     .foregroundStyle(.secondary)
 
                 TextField("新版本", text: $model.editingComponentVersion)
                     .textFieldStyle(.roundedBorder)
-                    .font(.subheadline.monospaced().bold())
-                    .frame(width: 100)
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .frame(width: 110)
 
                 Button("+Patch") {
                     model.bumpEditingVersion(.patch)
                 }
-                .controlSize(.small)
+                .controlSize(.regular)
 
                 Button("+Minor") {
                     model.bumpEditingVersion(.minor)
                 }
-                .controlSize(.small)
+                .controlSize(.regular)
 
                 Button("+Beta") {
                     model.bumpEditingBetaVersion()
                 }
-                .controlSize(.small)
+                .controlSize(.regular)
 
                 if model.editingComponentVersion.contains("-beta") {
                     Button("转正式版") {
                         model.promoteEditingBetaToRelease()
                     }
-                    .controlSize(.small)
+                    .controlSize(.regular)
                 }
 
                 Button("应用版本") {
                     model.applyComponentVersionUpdate()
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .controlSize(.regular)
             }
 
             // 核心发布开关
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 Toggle("发布前自动提交并推送本地代码（Git commit & push）", isOn: $model.autoCommitAndPushBeforePublish)
-                    .font(.subheadline)
+                    .font(.system(size: 14, weight: .medium))
                 Toggle("构建时下层依赖使用源码（--code-dependencies）", isOn: $model.codeDependencies)
-                    .font(.subheadline)
+                    .font(.system(size: 14, weight: .medium))
 
                 DisclosureGroup("高级构建与发布参数", isExpanded: $isAdvancedOptionsExpanded) {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 9) {
                         Toggle("保留构建中间产物（--no-clean）", isOn: $model.keepIntermediates)
                         Toggle("跳过 Git Tag 创建/校验（--skip-tag）", isOn: $model.skipTag)
                         Toggle("跳过源码 Spec 推送（--skip-code-spec）", isOn: $model.skipCodeSpec)
                         Toggle("归档时构建缺失依赖（--all-make）", isOn: $model.buildMissingDependencies)
                     }
-                    .font(.caption)
-                    .padding(.top, 4)
+                    .font(.system(size: 13))
+                    .padding(.top, 6)
                 }
-                .font(.caption)
+                .font(.system(size: 13.5, weight: .medium))
                 .foregroundStyle(.secondary)
             }
 
@@ -947,11 +949,13 @@ private struct ComponentPublishCard: View {
                 Button("仅构建二进制 (pod bin archive)") {
                     model.runArchive(for: info.name)
                 }
+                .controlSize(.regular)
                 .disabled(model.isBusy(for: .component(name: info.name)))
 
                 Button("发布预检 (pod bin publish --dry-run)") {
                     model.runPublishDryRun(for: info.name)
                 }
+                .controlSize(.regular)
                 .disabled(model.isBusy(for: .component(name: info.name)))
 
                 Spacer()
@@ -960,9 +964,10 @@ private struct ComponentPublishCard: View {
                     isShowingPublishConfirmation = true
                 } label: {
                     Label("正式发布组件 (pod bin publish)", systemImage: "paperplane.fill")
-                        .fontWeight(.semibold)
+                        .font(.system(size: 14, weight: .semibold))
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
                 .disabled(model.isBusy(for: .component(name: info.name)))
             }
 
@@ -970,11 +975,11 @@ private struct ComponentPublishCard: View {
             if let artifact = model.latestArtifactReport {
                 HStack(spacing: 8) {
                     Image(systemName: "archivebox.fill").foregroundStyle(.tint)
-                    Text(artifact.fileURL.lastPathComponent).font(.caption.monospaced())
+                    Text(artifact.fileURL.lastPathComponent).font(.system(size: 13, design: .monospaced))
                     Spacer()
-                    Text("体积: \(artifact.formattedSize)").font(.caption.bold()).foregroundStyle(.blue)
+                    Text("体积: \(artifact.formattedSize)").font(.system(size: 13, weight: .bold)).foregroundStyle(.blue)
                 }
-                .padding(8)
+                .padding(10)
                 .background(Color(nsColor: .controlBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             }
@@ -1011,19 +1016,24 @@ private struct ComponentDependenciesCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("组件依赖关系 (s.dependency)", systemImage: "link")
-                .font(.headline)
+                .font(.system(size: 16, weight: .bold))
 
             Divider()
 
             if info.dependencies.isEmpty {
-                Text("此组件无外部依赖。").font(.caption).foregroundStyle(.secondary)
+                Text("此组件无外部依赖。")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(.secondary)
             } else {
                 ForEach(info.dependencies) { dep in
-                    HStack {
+                    HStack(spacing: 8) {
                         Image(systemName: "shippingbox").foregroundStyle(.secondary)
-                        Text(dep.name).font(.caption.monospaced().bold())
+                        Text(dep.name)
+                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
                         if let req = dep.versionRequirement, !req.isEmpty {
-                            Text(req).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            Text(req)
+                                .font(.system(size: 13.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button(role: .destructive) {
@@ -1033,25 +1043,30 @@ private struct ComponentDependenciesCard: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    .padding(.vertical, 2)
                 }
             }
 
             Divider()
 
             // 快速添加依赖
-            HStack {
+            HStack(spacing: 8) {
                 TextField("依赖名 (如 AFNetworking)", text: $newDepName)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 180)
+                    .controlSize(.regular)
+                    .font(.system(size: 13.5))
+                    .frame(width: 200)
                 TextField("版本约束 (如 ~> 0.1.0)", text: $newDepVersion)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 140)
+                    .controlSize(.regular)
+                    .font(.system(size: 13.5))
+                    .frame(width: 160)
                 Button("添加依赖") {
                     model.addOrUpdateSelectedPodspecDependency(name: newDepName, versionRequirement: newDepVersion)
                     newDepName = ""
                     newDepVersion = ""
                 }
-                .controlSize(.small)
+                .controlSize(.regular)
                 .disabled(newDepName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -1217,14 +1232,14 @@ private struct ToolchainTab: View {
             }
 
             if let report = model.toolchain {
-                Text("Shell: \(report.shellPath)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text("Shell: \(report.shellPath)").font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary)
                 ForEach(report.probes) { probe in
                     HStack {
                         Label(probe.name, systemImage: probe.isAvailable ? "checkmark.circle.fill" : "xmark.circle.fill")
                             .foregroundStyle(probe.isAvailable ? .green : .red)
                         Spacer()
                         Text(probe.version ?? probe.error ?? "未知")
-                            .font(.caption.monospaced())
+                            .font(.system(size: 13, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -1244,7 +1259,7 @@ private struct BinaryServerTab: View {
                 Spacer()
                 Button("检测服务") { model.refreshBinaryServer() }
             }
-            Text("服务地址: \(model.binaryServerAddress)").font(.caption.monospaced())
+            Text("服务地址: \(model.binaryServerAddress)").font(.system(size: 13, design: .monospaced))
             Text("已发布组件: \(model.binaryComponents.count) 个 / \(model.binaryVersionCount) 个版本")
                 .font(.subheadline)
 
@@ -1253,7 +1268,7 @@ private struct BinaryServerTab: View {
                     Text(comp.name).font(.headline)
                     Spacer()
                     Text(comp.versions.joined(separator: ", "))
-                        .font(.caption.monospaced())
+                        .font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
             }
