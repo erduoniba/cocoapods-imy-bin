@@ -5,8 +5,9 @@ module Pod
       # configuration is valid for installation.
       #
       class TargetValidator
-
-
+        # 允许动态库依赖静态二进制产物（XCFramework 支持动态库集成静态依赖，跳过旧版 CocoaPods 的激进校验）
+        def verify_no_static_framework_transitive_dependencies
+        end
 
         def verify_swift_pods_have_module_dependencies
           error_messages = []

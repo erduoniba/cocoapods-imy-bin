@@ -292,3 +292,33 @@ import Testing
     #expect(!WorkbenchWindowIdentifier.isComponentManagerWindow(title: "IMY Bin — App 依赖管理工作台", identifier: "app-manager"))
     #expect(!WorkbenchWindowIdentifier.isComponentManagerWindow(title: "IMY Bin — 组件工作台", identifier: "component-window"))
 }
+
+@Test func sourceDebuggingCommandSpecsAndPolicyTransitions() {
+    let spec = BinCommandBuilder.attachSource(component: "HDStaticPod", sourceURL: URL(fileURLWithPath: "/Projects/HDStaticPod"))
+    #expect(spec.arguments.contains("code"))
+    #expect(spec.arguments.contains("HDStaticPod"))
+    #expect(spec.arguments.contains("--source=/Projects/HDStaticPod"))
+
+    let cleanSpec = BinCommandBuilder.cleanAttachedSources(component: "HDStaticPod")
+    #expect(cleanSpec.arguments.contains("--clean"))
+    #expect(cleanSpec.arguments.contains("HDStaticPod"))
+
+    let allCleanSpec = BinCommandBuilder.cleanAttachedSources(component: nil)
+    #expect(allCleanSpec.arguments.contains("--all-clean"))
+
+    var entry = ComponentConfigEntry(name: "HDStaticPod", version: "0.1.11", mode: "binary", path: "../HDStaticPod")
+    #expect(entry.supportsLocal)
+    #expect(entry.mode == "binary")
+
+    // Switching to local for debugging
+    entry.mode = entry.supportsLocal ? "local" : "source"
+    #expect(entry.mode == "local")
+
+    // Switching to source
+    entry.mode = "source"
+    #expect(entry.mode == "source")
+
+    // Reverting to binary
+    entry.mode = "binary"
+    #expect(entry.mode == "binary")
+}

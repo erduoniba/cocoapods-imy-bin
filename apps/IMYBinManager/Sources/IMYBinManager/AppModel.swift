@@ -86,7 +86,13 @@ final class AppModel: ObservableObject {
     @Published var editingComponentVersion = ""
     @Published var syncVersionToAppPodfile = true
     @Published var autoCommitVersionBump = true
-    @Published var autoInstallAfterSwitch = false
+    private static let autoInstallAfterSwitchKey = "IMYBinManager.autoInstallAfterSwitch"
+    @Published var autoInstallAfterSwitch: Bool = true {
+        didSet {
+            UserDefaults.standard.set(autoInstallAfterSwitch, forKey: Self.autoInstallAfterSwitchKey)
+        }
+    }
+    @Published var attachedSourceComponents: Set<String> = []
 
     // Component's own dependencies (podspec s.dependency + Example/.imy-bin-config.json)
     @Published var newPodspecDepName = ""
@@ -266,6 +272,11 @@ final class AppModel: ObservableObject {
             ?? "http://localhost:8080"
         customCPHomeDir = UserDefaults.standard.string(forKey: Self.customCPHomeDirKey) ?? ""
         customPluginLibDir = UserDefaults.standard.string(forKey: Self.customPluginLibDirKey) ?? ""
+        if let savedAutoInstall = UserDefaults.standard.object(forKey: Self.autoInstallAfterSwitchKey) as? Bool {
+            autoInstallAfterSwitch = savedAutoInstall
+        } else {
+            autoInstallAfterSwitch = true
+        }
         refreshToolchain()
         refreshRecents()
         refreshCacheSizes()
@@ -1517,6 +1528,108 @@ final class AppModel: ObservableObject {
             guard let appDir = requireAppDirectory() else { return }
             run([BinCommandBuilder.install()], in: appDir, scope: .app)
         }
+    }
+
+    // MARK: - 源码调试能力 (Source Debugging)
+
+    /// 开启指定组件的源码调试（优先切换为 local/source，并自动执行 pod install 更新工程）
+    func startSourceDebug(for componentName: String) {
+        guard var table = configTable,
+              let idx = table.components.firstIndex(where: { $0.name == componentName }) else { return }
+
+        // 如果存在可用本地路径，切为 local；否则切为 source
+        let targetMode = table.components[idx].supportsLocal ? "local" : "source"
+        table.components[idx].mode = targetMode
+        configTable = table
+        _ = saveConfigTable()
+
+        guard let appDir = requireAppDirectory() else { return }
+        run([BinCommandBuilder.install()], in: appDir, scope: .app)
+    }
+
+    /// 恢复指定组件为二进制模式，并执行 pod install 恢复加速
+    func revertToBinary(for componentName: String) {
+        guard var table = configTable,
+              let idx = table.components.firstIndex(where: { $0.name == componentName }) else { return }
+
+        table.components[idx].mode = "binary"
+        configTable = table
+        _ = saveConfigTable()
+
+        guard let appDir = requireAppDirectory() else { return }
+        run([BinCommandBuilder.install()], in: appDir, scope: .app)
+    }
+
+    /// 一键将所有组件切换为源码调试模式并执行安装
+    func startAllSourceDebug() {
+        guard var table = configTable else { return }
+        for idx in table.components.indices {
+            let targetMode = table.components[idx].supportsLocal ? "local" : "source"
+            table.components[idx].mode = targetMode
+        }
+        table.defaultMode = "source"
+        configTable = table
+        _ = saveConfigTable()
+
+        guard let appDir = requireAppDirectory() else { return }
+        run([BinCommandBuilder.install()], in: appDir, scope: .app)
+    }
+
+    /// 一键将所有组件恢复为二进制模式并执行安装
+    func revertAllToBinary() {
+        guard var table = configTable else { return }
+        for idx in table.components.indices {
+            table.components[idx].mode = "binary"
+        }
+        table.defaultMode = "binary"
+        configTable = table
+        _ = saveConfigTable()
+
+        guard let appDir = requireAppDirectory() else { return }
+        run([BinCommandBuilder.install()], in: appDir, scope: .app)
+    }
+
+    /// 检查指定组件是否已经挂载了源码软链
+    func isSourceAttached(for componentName: String) -> Bool {
+        attachedSourceComponents.contains(componentName)
+    }
+
+    /// 通过 pod bin code 将源码软链连接到二进制编译路径中（无需重新 pod install）
+    func attachSourceForDebug(for componentName: String) {
+        guard let appDir = requireAppDirectory() else { return }
+
+        // 查找本地源码路径
+        var localSourceURL: URL? = nil
+        if let info = localPodspecInfo(named: componentName) {
+            localSourceURL = info.repositoryURL
+        } else if let entry = configTable?.components.first(where: { $0.name == componentName }),
+                  let p = entry.path, !p.isEmpty {
+            if p.hasPrefix("/") {
+                localSourceURL = URL(fileURLWithPath: p)
+            } else {
+                localSourceURL = appDir.appendingPathComponent(p).standardizedFileURL
+            }
+        }
+
+        let command = BinCommandBuilder.attachSource(component: componentName, sourceURL: localSourceURL)
+        run([command], in: appDir, scope: .app)
+        attachedSourceComponents.insert(componentName)
+    }
+
+    /// 断开指定组件的源码软链
+    func detachSourceForDebug(for componentName: String) {
+        guard let appDir = requireAppDirectory() else { return }
+        let command = BinCommandBuilder.cleanAttachedSources(component: componentName)
+        run([command], in: appDir, scope: .app)
+        attachedSourceComponents.remove(componentName)
+    }
+
+    /// 清理所有已挂载的源码调试软链
+    func cleanAllAttachedSources() {
+        guard let appDir = requireAppDirectory() else { return }
+        let command = BinCommandBuilder.cleanAttachedSources(component: nil)
+        run([command], in: appDir, scope: .app)
+        attachedSourceComponents.removeAll()
     }
 
     func runArchive(for componentName: String? = nil) {

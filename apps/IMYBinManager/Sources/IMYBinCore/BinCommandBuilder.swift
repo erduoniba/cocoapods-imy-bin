@@ -299,9 +299,35 @@ public enum BinCommandBuilder {
         return CommandSpec(
             executableName: "pod",
             arguments: arguments,
-            title: "连接调试源码",
+            title: "挂载 \(component) 调试源码",
             mutatesProject: true,
             taskKind: .attachSource
+        )
+    }
+
+    public static func cleanAttachedSources(component: String? = nil) -> CommandSpec {
+        var arguments = ["bin", "code"]
+        if let component, !component.isEmpty {
+            arguments.append(contentsOf: ["--clean", component])
+        } else {
+            arguments.append("--all-clean")
+        }
+        return CommandSpec(
+            executableName: "pod",
+            arguments: arguments,
+            title: component != nil ? "断开 \(component!) 源码调试软链" : "清理全部源码调试软链",
+            mutatesProject: true,
+            taskKind: .attachSource
+        )
+    }
+
+    public static func listAttachedSources() -> CommandSpec {
+        CommandSpec(
+            executableName: "pod",
+            arguments: ["bin", "code", "--list"],
+            title: "查询已连接的调试源码",
+            mutatesProject: false,
+            taskKind: .inspect
         )
     }
 }

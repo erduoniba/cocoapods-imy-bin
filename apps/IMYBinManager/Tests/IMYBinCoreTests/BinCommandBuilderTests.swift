@@ -74,4 +74,17 @@ import Testing
     #expect(gitTag.executableName == "sh")
     #expect(gitTag.arguments[1].contains("git tag -f \"0.1.4\""))
     #expect(gitTag.arguments[1].contains("git push origin \"0.1.4\" --force"))
+
+    let attach = BinCommandBuilder.attachSource(component: "HDStaticPod", sourceURL: URL(fileURLWithPath: "/tmp/HDStaticPod"))
+    #expect(attach.arguments == ["bin", "code", "HDStaticPod", "--source=/tmp/HDStaticPod"])
+    #expect(attach.taskKind == .attachSource)
+
+    let cleanOne = BinCommandBuilder.cleanAttachedSources(component: "HDStaticPod")
+    #expect(cleanOne.arguments == ["bin", "code", "--clean", "HDStaticPod"])
+
+    let cleanAll = BinCommandBuilder.cleanAttachedSources(component: nil)
+    #expect(cleanAll.arguments == ["bin", "code", "--all-clean"])
+
+    let listSources = BinCommandBuilder.listAttachedSources()
+    #expect(listSources.arguments == ["bin", "code", "--list"])
 }

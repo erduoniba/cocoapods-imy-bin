@@ -100,6 +100,9 @@ module Pod
 
           spec_platform_names.sort.each do |platform_name|
             target "App-#{platform_name}" do
+              platform_sym = platform_name.downcase.to_sym
+              target_version = specs.map { |s| s.deployment_target(platform_sym) }.compact.first
+              platform(platform_sym, target_version) if target_version
               current_target_definition.swift_version = generator.swift_version if generator.swift_version
             end
           end

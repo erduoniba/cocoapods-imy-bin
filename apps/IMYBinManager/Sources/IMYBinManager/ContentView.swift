@@ -251,17 +251,47 @@ private struct AppFilterBar: View {
 
             Spacer()
 
-            // 批量切换快捷操作
-            HStack(spacing: 6) {
-                Text("批量切换:").font(.subheadline).foregroundStyle(.secondary)
-                Button("全转本地") { model.switchAllComponents(to: "local") }
-                    .controlSize(.regular)
-                Button("全转源码") { model.switchAllComponents(to: "source") }
-                    .controlSize(.regular)
-                Button("全转二进制") { model.switchAllComponents(to: "binary") }
-                    .controlSize(.regular)
-                Button("重置") { model.resetComponentModes() }
-                    .controlSize(.regular)
+            // 模式切换自动安装与批量操作
+            HStack(spacing: 8) {
+                Toggle("切换后自动执行安装", isOn: $model.autoInstallAfterSwitch)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12))
+                    .help("开启后，修改组件模式会自动执行 pod install 及时更新 Xcode 工程")
+
+                Divider().frame(height: 14)
+
+                // 批量调试快捷按钮
+                Button {
+                    model.startAllSourceDebug()
+                } label: {
+                    Label("全切源码调试", systemImage: "hammer.fill")
+                }
+                .controlSize(.regular)
+                .help("一键将全部组件切换为源码/本地模式并执行 pod install")
+
+                Button {
+                    model.revertAllToBinary()
+                } label: {
+                    Label("全切二进制", systemImage: "arrow.uturn.backward.circle.fill")
+                }
+                .controlSize(.regular)
+                .help("一键将全部组件恢复为二进制模式并执行 pod install")
+
+                Menu {
+                    Button("全转本地模式") { model.switchAllComponents(to: "local") }
+                    Button("全转源码模式") { model.switchAllComponents(to: "source") }
+                    Button("全转二进制模式") { model.switchAllComponents(to: "binary") }
+                    Button("重置全部模式") { model.resetComponentModes() }
+                    Divider()
+                    Button("清理全部已挂载源码软链 (pod bin code --all-clean)") {
+                        model.cleanAllAttachedSources()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 20)
+                .help("更多批量操作")
             }
         }
         .padding(.horizontal, 16)
@@ -395,6 +425,33 @@ private struct ComponentConfigCard: View {
                         .font(.system(size: 16, weight: .bold, design: .rounded))
                         .strikethrough(!entry.enabled)
 
+                    // 调试模式徽标
+                    if entry.mode == "source" {
+                        Text("源码调试中")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.green)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.12))
+                            .clipShape(Capsule())
+                    } else if entry.mode == "local" {
+                        Text("本地调试中")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.blue)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.12))
+                            .clipShape(Capsule())
+                    } else if model.isSourceAttached(for: entry.name) {
+                        Text("软链已挂载")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.purple)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.purple.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+
                     // 状态 Badge
                     if isPublished {
                         HStack(spacing: 3) {
@@ -501,7 +558,7 @@ private struct ComponentConfigCard: View {
                 Text("分支").tag("branch")
             }
             .pickerStyle(.segmented)
-            .frame(width: 280)
+            .frame(width: 250)
             .popover(item: $activeModeConfig) { sheet in
                 switch sheet {
                 case .branch:
@@ -509,6 +566,49 @@ private struct ComponentConfigCard: View {
                 case .local:
                     localPathPopoverView
                 }
+            }
+
+            // 快捷源码调试动作组
+            if entry.mode == "binary" {
+                Menu {
+                    Button {
+                        model.startSourceDebug(for: entry.name)
+                    } label: {
+                        Label("切换为源码调试 (执行 pod install)", systemImage: "hammer.fill")
+                    }
+                    Button {
+                        model.attachSourceForDebug(for: entry.name)
+                    } label: {
+                        Label("挂载源码软链调试 (保持二进制，跳断点)", systemImage: "link")
+                    }
+                } label: {
+                    Label("源码调试", systemImage: "ladybug")
+                }
+                .menuStyle(.borderedButton)
+                .controlSize(.regular)
+                .help("开启源码调试能力：可切换为源码工程或挂载断点软链")
+            } else {
+                Button {
+                    model.revertToBinary(for: entry.name)
+                } label: {
+                    Label("切回二进制", systemImage: "arrow.uturn.backward.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .tint(.orange)
+                .help("调试完毕，恢复为二进制加速编译")
+            }
+
+            if model.isSourceAttached(for: entry.name) {
+                Button {
+                    model.detachSourceForDebug(for: entry.name)
+                } label: {
+                    Image(systemName: "link.badge.plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .tint(.purple)
+                .help("已挂载调试软链，点击断开")
             }
 
             // 跳转到组件工作台发版
@@ -710,13 +810,90 @@ private struct ComponentConfigCard: View {
 
 // MARK: - 通用底部控制台抽屉 (ConsoleDrawer)
 
+private struct ConsoleResizeHandle: View {
+    let isDragging: Bool
+    let onDragChanged: (CGFloat) -> Void
+    let onDragEnded: () -> Void
+    let onReset: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(height: 1)
+
+            // 扩大鼠标响应范围（热区高度 8pt）
+            Rectangle()
+                .fill(Color.clear)
+                .frame(height: 8)
+                .contentShape(Rectangle())
+
+            // 居中的拖拽把手胶囊指示器
+            Capsule()
+                .fill(isDragging ? Color.accentColor : (isHovered ? Color.secondary : Color.secondary.opacity(0.35)))
+                .frame(width: 38, height: 3.5)
+        }
+        .frame(height: 8)
+        .onHover { inside in
+            isHovered = inside
+            if inside {
+                NSCursor.resizeUpDown.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { value in
+                    onDragChanged(value.translation.height)
+                }
+                .onEnded { _ in
+                    onDragEnded()
+                }
+        )
+        .onTapGesture(count: 2) {
+            onReset()
+        }
+        .help("按住上下拖动调整日志高度，双击恢复默认高度")
+    }
+}
+
 private struct ConsoleDrawer: View {
     @EnvironmentObject private var model: AppModel
     let scope: TaskScope
     @Binding var isExpanded: Bool
 
+    @AppStorage("IMYBinConsoleDrawerHeight") private var consoleHeight: Double = 280
+    @State private var dragStartHeight: Double = 280
+    @State private var isDragging: Bool = false
+
     var body: some View {
         VStack(spacing: 0) {
+            // 展开时顶部可拖动控制高度的手柄
+            if isExpanded {
+                ConsoleResizeHandle(
+                    isDragging: isDragging,
+                    onDragChanged: { translationY in
+                        if !isDragging {
+                            isDragging = true
+                            dragStartHeight = consoleHeight
+                        }
+                        let newHeight = dragStartHeight - Double(translationY)
+                        consoleHeight = min(max(newHeight, 130), 750)
+                    },
+                    onDragEnded: {
+                        isDragging = false
+                    },
+                    onReset: {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                            consoleHeight = 280
+                        }
+                    }
+                )
+            }
+
             // 抽屉状态头部栏
             HStack(spacing: 10) {
                 // 运行状态指示灯
@@ -844,7 +1021,7 @@ private struct ConsoleDrawer: View {
                         proxy.scrollTo("logBottom", anchor: .bottom)
                     }
                 }
-                .frame(height: 280)
+                .frame(height: CGFloat(consoleHeight))
             }
         }
     }
@@ -1108,17 +1285,17 @@ private struct ComponentTopBar: View {
                     .controlSize(.regular)
                 }
 
-                // 安装依赖快捷按钮组
+                // 安装依赖快捷按钮组（组件工作台唯一依赖安装入口）
                 HStack(spacing: 4) {
                     Button {
                         model.runComponentInstall(for: info.name)
                     } label: {
-                        Label("安装依赖 (pod install)", systemImage: "arrow.down.circle.fill")
+                        Label("安装依赖", systemImage: "arrow.down.circle.fill")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
                     .disabled(model.isBusy(for: .component(name: info.name)))
-                    .help("执行 pod bin install 安装下层依赖与 Example 工程依赖")
+                    .help("组件依赖安装入口：在 Example 工程中执行 pod bin install")
 
                     Menu {
                         Button("更新依赖 (pod bin update)") {
@@ -1245,15 +1422,6 @@ private struct ComponentPublishCard: View {
 
             // 发布主操作按钮
             HStack(spacing: 12) {
-                Button {
-                    model.runComponentInstall(for: info.name)
-                } label: {
-                    Label("安装依赖", systemImage: "arrow.down.circle")
-                }
-                .controlSize(.regular)
-                .disabled(model.isBusy(for: .component(name: info.name)))
-                .help("执行 pod bin install 安装下层依赖与 Example 工程依赖")
-
                 Button("仅构建二进制 (pod bin archive)") {
                     model.runArchive(for: info.name)
                 }
@@ -1313,7 +1481,7 @@ private struct ComponentPublishCard: View {
     }
 }
 
-// MARK: - 核心卡片 2：依赖管理与关联 (ComponentDependenciesCard)
+// MARK: - 核心卡片 2：依赖管理与调试模式 (ComponentDependenciesCard)
 
 private struct ComponentDependenciesCard: View {
     @EnvironmentObject private var model: AppModel
@@ -1323,29 +1491,18 @@ private struct ComponentDependenciesCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            // 标题栏：简洁展示信息与自动安装开关（安装/更新入口已统一在顶部常驻工具栏）
             HStack {
-                Label("组件依赖关系 (s.dependency)", systemImage: "link")
+                Label("组件依赖与调试模式", systemImage: "link")
                     .font(.system(size: 16, weight: .bold))
 
                 Spacer()
 
-                Button {
-                    model.runComponentInstall(for: info.name)
-                } label: {
-                    Label("安装依赖", systemImage: "arrow.down.circle.fill")
+                if info.exampleDirectoryURL != nil {
+                    Toggle("模式切换后自动安装", isOn: $model.autoInstallComponentExampleAfterSwitch)
+                        .toggleStyle(.checkbox)
+                        .font(.caption)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(model.isBusy(for: .component(name: info.name)))
-                .help("执行 pod bin install 安装下层依赖与 Example 工程依赖")
-
-                Button {
-                    model.runComponentUpdate(for: info.name)
-                } label: {
-                    Label("更新依赖", systemImage: "arrow.clockwise")
-                }
-                .controlSize(.small)
-                .disabled(model.isBusy(for: .component(name: info.name)))
 
                 Text("\(info.dependencies.count) 个声明依赖")
                     .font(.caption)
@@ -1354,58 +1511,15 @@ private struct ComponentDependenciesCard: View {
 
             Divider()
 
-            // 1. 已声明依赖列表
+            // 1. 统一依赖列表：同时管理 Podspec 版本声明与 Example 调试模式
             if info.dependencies.isEmpty {
-                Text("此组件尚未在 \(info.podspecURL.lastPathComponent) 中声明外部依赖。")
+                Text("此组件尚未在 \(info.podspecURL.lastPathComponent) 中声明外部依赖。可在下方快捷添加。")
                     .font(.system(size: 13.5))
                     .foregroundStyle(.secondary)
             } else {
-                VStack(spacing: 6) {
+                VStack(spacing: 8) {
                     ForEach(info.dependencies) { dep in
-                        HStack(spacing: 8) {
-                            Image(systemName: "shippingbox.fill")
-                                .foregroundStyle(Color.accentColor)
-                            Text(dep.name)
-                                .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                            if let req = dep.versionRequirement, !req.isEmpty {
-                                Text(req)
-                                    .font(.system(size: 13, design: .monospaced))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.secondary.opacity(0.12))
-                                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                            }
-                            Spacer()
-
-                            // 快捷更新版本约束
-                            let remoteVersions = model.publishedVersions(for: dep.name)
-                            if !remoteVersions.isEmpty {
-                                Menu {
-                                    ForEach(remoteVersions, id: \.self) { v in
-                                        Button("~> \(v)") {
-                                            model.addOrUpdatePodspecDependency(for: info.name, name: dep.name, versionRequirement: "~> \(v)")
-                                        }
-                                    }
-                                } label: {
-                                    Text("修改版本")
-                                        .font(.caption)
-                                }
-                                .controlSize(.small)
-                            }
-
-                            Button(role: .destructive) {
-                                model.removePodspecDependency(for: info.name, depName: dep.name)
-                            } label: {
-                                Image(systemName: "trash")
-                                    .foregroundStyle(.red)
-                            }
-                            .buttonStyle(.plain)
-                            .help("从 \(info.podspecURL.lastPathComponent) 移除此依赖")
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        ComponentUnifiedDependencyRow(info: info, dep: dep)
                     }
                 }
             }
@@ -1525,10 +1639,23 @@ private struct ComponentDependenciesCard: View {
                 .disabled(newDepName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
-            // 4. Example 调试工程依赖模式管理
-            if info.exampleDirectoryURL != nil {
-                Divider()
-                ComponentExampleDependenciesSection(info: info)
+            // 4. Example 额外测试专用依赖（如果在 Example Podfile 中引入了额外库）
+            if let table = model.componentConfigTable, info.exampleDirectoryURL != nil {
+                let declaredNames = Set(info.dependencies.map { $0.name.split(separator: "/").first.map(String.init) ?? $0.name })
+                let extraEntries = table.components.filter { !declaredNames.contains($0.name) }
+                if !extraEntries.isEmpty {
+                    Divider()
+                    DisclosureGroup("Example 额外测试组件 (\(extraEntries.count))") {
+                        VStack(spacing: 8) {
+                            ForEach(extraEntries) { entry in
+                                ComponentExampleDepRow(componentName: info.name, entry: entry)
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(16)
@@ -1543,75 +1670,194 @@ private struct ComponentDependenciesCard: View {
     }
 }
 
-// MARK: - 组件 Example 调试工程依赖模式 Section
+// MARK: - 统一依赖单项行 (ComponentUnifiedDependencyRow)
 
-private struct ComponentExampleDependenciesSection: View {
+private struct ComponentUnifiedDependencyRow: View {
+    enum ModeSheet: String, Identifiable {
+        case branch
+        case local
+
+        var id: String { rawValue }
+    }
+
     @EnvironmentObject private var model: AppModel
     let info: ComponentPodspecInfo
+    let dep: PodspecDependency
+
+    @State private var activeSheet: ModeSheet?
+    @State private var localPathDraft = ""
+    @State private var branchDraft = ""
+    @State private var gitURLDraft = ""
+
+    private var rootName: String {
+        dep.name.split(separator: "/").first.map(String.init) ?? dep.name
+    }
+
+    private var entry: ComponentConfigEntry? {
+        model.componentConfigTable?.components.first(where: { $0.name == dep.name || $0.name == rootName })
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Example 调试工程组件模式 (Example/.imy-bin-config.json)", systemImage: "slider.horizontal.3")
-                    .font(.system(size: 15, weight: .bold))
+        HStack(spacing: 12) {
+            Image(systemName: "shippingbox.fill")
+                .foregroundStyle(Color.accentColor)
 
-                Spacer()
+            // 左侧：组件名称与版本约束
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(dep.name)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
 
-                Button("从 podspec 同步") {
-                    model.syncPodspecDependenciesToComponentExampleConfig(for: info.name)
-                }
-                .controlSize(.small)
+                    if let req = dep.versionRequirement, !req.isEmpty {
+                        Text(req)
+                            .font(.system(size: 12, design: .monospaced))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
 
-                Button("更新依赖 (pod update)") {
-                    model.runComponentUpdate(for: info.name)
-                }
-                .controlSize(.small)
-                .disabled(model.isBusy(for: .component(name: info.name)))
-
-                Button("安装依赖 (pod install)") {
-                    model.runComponentInstall(for: info.name)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(model.isBusy(for: .component(name: info.name)))
-            }
-
-            HStack {
-                Text("为当前组件的 Example 演示工程选择依赖模式（本地源码调试或二进制集成）：")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                Toggle("切换后自动执行 pod bin install", isOn: $model.autoInstallComponentExampleAfterSwitch)
-                    .toggleStyle(.checkbox)
-                    .font(.caption)
-            }
-
-            if let entries = model.componentConfigTable?.components, !entries.isEmpty {
-                VStack(spacing: 8) {
-                    ForEach(entries) { entry in
-                        ComponentExampleDepRow(componentName: info.name, entry: entry)
+                    // 快捷更新版本约束
+                    let remoteVersions = model.publishedVersions(for: dep.name)
+                    if !remoteVersions.isEmpty {
+                        Menu {
+                            ForEach(remoteVersions, id: \.self) { v in
+                                Button("~> \(v)") {
+                                    model.addOrUpdatePodspecDependency(for: info.name, name: dep.name, versionRequirement: "~> \(v)")
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .frame(width: 16)
+                        .help("选择远端已发布版本")
                     }
                 }
-            } else {
-                HStack {
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(.secondary)
-                    Text("Example 工程中暂无其他下层依赖组件。在上方添加依赖后，点击「从 podspec 同步」即可在此管理。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+
+                // 本地路径 / 分支配置状态提示
+                if info.exampleDirectoryURL != nil, let e = entry {
+                    if e.mode == "branch", let b = e.branch {
+                        Text("分支: \(b)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.purple)
+                    } else if e.mode == "local" {
+                        HStack(spacing: 4) {
+                            Text("本地: \(e.path ?? "未配置")")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(e.path == nil || e.path?.isEmpty == true ? .red : .secondary)
+
+                            Button {
+                                localPathDraft = e.path ?? ""
+                                activeSheet = .local
+                            } label: {
+                                Image(systemName: "folder.badge.gearshape")
+                                    .font(.system(size: 10))
+                            }
+                            .buttonStyle(.borderless)
+                            .help("选择本地目录")
+                        }
+                    }
                 }
-                .padding(.vertical, 6)
             }
+
+            Spacer()
+
+            // 右侧：Example 调试工程组件模式切换 (仅在有 Example 时展示)
+            if info.exampleDirectoryURL != nil, let e = entry {
+                Picker("", selection: Binding(
+                    get: { e.mode },
+                    set: { newMode in
+                        if newMode == "branch" {
+                            branchDraft = e.branch ?? "main"
+                            gitURLDraft = e.git ?? ""
+                            activeSheet = .branch
+                        } else if newMode == "local" {
+                            localPathDraft = e.path ?? ""
+                            activeSheet = .local
+                        } else {
+                            model.switchComponentExampleDepMode(e.name, to: newMode, for: info.name)
+                        }
+                    }
+                )) {
+                    Text("本地").tag("local")
+                    Text("源码").tag("source")
+                    Text("二进制").tag("binary")
+                    Text("分支").tag("branch")
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 250)
+                .popover(item: $activeSheet) { sheet in
+                    switch sheet {
+                    case .branch:
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("配置 \(e.name) Git 分支")
+                                .font(.headline)
+                            TextField("Git 仓库地址", text: $gitURLDraft)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 300)
+                            TextField("分支名 (如 feature/dev)", text: $branchDraft)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 300)
+                            HStack {
+                                Button("取消") { activeSheet = nil }
+                                Spacer()
+                                Button("应用") {
+                                    model.updateComponentExampleEntryBranch(e.name, git: gitURLDraft, branch: branchDraft)
+                                    activeSheet = nil
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                        .padding(14)
+                        .frame(width: 340)
+
+                    case .local:
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("选择 \(e.name) 本地源码目录")
+                                .font(.headline)
+                            HStack {
+                                TextField("路径 (如 ../\(e.name))", text: $localPathDraft)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 280)
+                                Button("浏览…") {
+                                    if let chosen = model.chooseExampleLocalDirectory(for: e.name, in: info.name, initialPath: localPathDraft) {
+                                        localPathDraft = chosen
+                                    }
+                                }
+                            }
+                            HStack {
+                                Button("取消") { activeSheet = nil }
+                                Spacer()
+                                Button("确定切换为本地") {
+                                    model.updateComponentExampleEntryLocalPath(e.name, path: localPathDraft, for: info.name)
+                                    activeSheet = nil
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                        .padding(14)
+                        .frame(width: 380)
+                    }
+                }
+            }
+
+            // 移除依赖按钮
+            Button(role: .destructive) {
+                model.removePodspecDependency(for: info.name, depName: dep.name)
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("从 \(info.podspecURL.lastPathComponent) 移除此依赖")
         }
-        .padding(14)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
-        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 

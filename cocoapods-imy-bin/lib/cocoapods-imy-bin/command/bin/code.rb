@@ -117,21 +117,21 @@ module Pod
 
         #链接，.a文件位置， 源码目录，工程名=IMYFoundation
         def link(lib_file,target_path,basename)
-          dir = (`dwarfdump "#{lib_file}" | grep "AT_comp_dir" | head -1 | cut -d \\" -f2 `)
-          sub_path = "#{basename}/bin-archive/#{basename}"
+          raw_dir = (`dwarfdump "#{lib_file}" | grep "AT_comp_dir" | head -1 | cut -d \\" -f2 `).chomp
+          if raw_dir.empty?
+            UI.puts "提示: 二进制未包含 DWARF AT_comp_dir 符号信息，可能为 Release 去符号产物。".yellow
+            return
+          end
 
-          # 用于 pod bin code 源码调试，找到打包电脑上的编译代码的路径
-          # 需要去掉 Pods 这个路径
+          sub_path = "#{basename}/bin-archive/#{basename}"
+          dir = raw_dir.sub(/\/Pods\/?\z/, "")
           dir = dir.gsub("#{basename}/Pods", "").chomp
           dir = dir.gsub(sub_path, "").chomp
-          # UI.puts "dir = #{dir}"
 
           unless File.exist?(dir)
-            # UI.puts "不存在 = #{dir}"
             begin
               FileUtils.mkdir_p(dir)
             rescue SystemCallError
-              #判断用户目录是否存在
               array = dir.split('/')
               if array.length > 3
                 root_path = '/' + array[1] + '/' + array[2]
@@ -142,39 +142,71 @@ module Pod
             end
           end
 
-          if Pathname.new(lib_file).extname == ".a"
-            FileUtils.rm_rf(File.join(dir,basename))
-            `ln -s #{target_path} #{dir}`
+          source_to_link = if File.directory?(File.join(target_path, basename))
+            File.join(target_path, basename)
           else
-            FileUtils.rm_rf(File.join(dir,basename))
-            `ln -s #{target_path} #{dir}/#{basename}`
+            target_path
           end
 
-          check(lib_file,dir,basename)
+          if Pathname.new(lib_file).extname == ".a"
+            FileUtils.rm_rf(File.join(dir, basename))
+            `ln -sf "#{source_to_link}" "#{dir}"`
+          else
+            FileUtils.rm_rf(File.join(dir, basename))
+            `ln -sf "#{source_to_link}" "#{dir}/#{basename}"`
+          end
+
+          check(lib_file, dir, basename)
         end
 
         def check(lib_file,dir,basename)
-          file = `dwarfdump "#{lib_file}" | grep -E "DW_AT_decl_file.*#{basename}.*\\.m|\\.c" | head -1 | cut -d \\" -f2`
-          if File.exist?(file)
-            raise "#{file} 不存在 请检测代码源是否正确~"
+          file = `dwarfdump "#{lib_file}" | grep -E "DW_AT_decl_file.*#{basename}.*(\\.m|\\.c|\\.swift|\\.h)" | head -1 | cut -d \\" -f2`.chomp
+          if !file.empty? && !File.exist?(file)
+            UI.puts "提示: 符号路径 #{file} 尚未完全匹配，请确认源码目录中包含该文件。".yellow
+          else
+            UI.puts "link successfully!"
+            UI.puts "view linked source at path: #{dir}"
           end
-          UI.puts "link successfully!"
-          UI.puts "view linked source at path: #{dir}"
         end
 
         def get_lib_path(name)
-          dir = Pathname.new(File.join(Pathname.pwd,"Pods",name))
-          lib_name = "lib#{name}.a"
-          unless File.exist?(lib_name)
-            lib_name = "#{name}"
-          end
-          lib_path = File.join(dir,lib_name)
+          dir = Pathname.new(File.join(Pathname.pwd, "Pods", name))
+          raise "找不到 Pods/#{name} 目录" unless dir.exist?
 
-          unless File.exist?(lib_path)
-            lib_path = File.join(dir.children.first,lib_name)
+          # 1. 直接匹配常见路径
+          direct_candidates = [
+            dir.join("lib#{name}.a"),
+            dir.join(name),
+            dir.join("#{name}.framework", name),
+            dir.join("ios", "#{name}.framework", name)
+          ]
+          if found = direct_candidates.find { |p| p.file? }
+            return found.to_s
           end
 
-          lib_path
+          # 2. XCFramework 结构匹配（优先考虑 simulator 切片，方便本地调试）
+          xcframework_dirs = Dir.glob("#{dir}/**/*.xcframework")
+          unless xcframework_dirs.empty?
+            xcframework_dir = xcframework_dirs.first
+            sim_candidates = Dir.glob("#{xcframework_dir}/*simulator*/**/#{name}").select { |f| File.file?(f) }
+            sim_a = Dir.glob("#{xcframework_dir}/*simulator*/**/lib#{name}.a").select { |f| File.file?(f) }
+            all_name = Dir.glob("#{xcframework_dir}/**/#{name}").select { |f| File.file?(f) }
+            all_a = Dir.glob("#{xcframework_dir}/**/*.a").select { |f| File.file?(f) }
+
+            picked = (sim_candidates + sim_a + all_name + all_a).first
+            return picked if picked
+          end
+
+          # 3. 递归匹配二进制文件
+          glob_candidates = Dir.glob("#{dir}/**/#{name}").select { |f| File.file?(f) }
+          glob_a = Dir.glob("#{dir}/**/lib#{name}.a").select { |f| File.file?(f) }
+          picked = (glob_candidates + glob_a).first
+          return picked if picked
+
+          # 4. 最后兜底
+          lib_path = dir.join("lib#{name}.a")
+          lib_path = dir.join(name) unless lib_path.exist?
+          lib_path.to_s
         end
 
         #源码地址
