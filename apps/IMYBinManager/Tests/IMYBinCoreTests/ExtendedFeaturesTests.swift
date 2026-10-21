@@ -238,3 +238,43 @@ import Testing
     #expect(entryB.path == absPathB)
     #expect(entryB.supportsLocal == true)
 }
+
+@Test func podspecDependencyUpsertAndRemove() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("PodspecDepTest-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+    let specFile = tmpDir.appendingPathComponent("DemoModule.podspec")
+    let initialSpec = """
+    Pod::Spec.new do |s|
+      s.name = 'DemoModule'
+      s.version = '0.1.0'
+      s.summary = 'Demo'
+      s.homepage = 'https://example.com'
+      s.license = 'MIT'
+      s.author = { 'dev' => 'dev@example.com' }
+      s.source = { :git => 'https://example.com/demo.git', :tag => s.version.to_s }
+      s.ios.deployment_target = '15.0'
+      s.source_files = 'Classes/**/*'
+    end
+    """
+    try initialSpec.write(to: specFile, atomically: true, encoding: .utf8)
+
+    // Add dependency
+    try PodspecInspector.upsertDependency(in: specFile, name: "HDStaticPod", versionRequirement: "~> 0.1.11")
+    let info1 = try PodspecInspector.inspect(specFile, includeGitStatus: false)
+    #expect(info1.dependencies.count == 1)
+    #expect(info1.dependencies.first?.name == "HDStaticPod")
+    #expect(info1.dependencies.first?.versionRequirement == "~> 0.1.11")
+
+    // Update dependency version
+    try PodspecInspector.upsertDependency(in: specFile, name: "HDStaticPod", versionRequirement: "~> 0.2.0")
+    let info2 = try PodspecInspector.inspect(specFile, includeGitStatus: false)
+    #expect(info2.dependencies.count == 1)
+    #expect(info2.dependencies.first?.versionRequirement == "~> 0.2.0")
+
+    // Remove dependency
+    try PodspecInspector.removeDependency(in: specFile, name: "HDStaticPod")
+    let info3 = try PodspecInspector.inspect(specFile, includeGitStatus: false)
+    #expect(info3.dependencies.isEmpty)
+}

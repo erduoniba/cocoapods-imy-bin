@@ -630,8 +630,50 @@ final class AppModel: ObservableObject {
 
     // MARK: - Component's Own Dependencies (podspec s.dependency & Example/.imy-bin-config.json)
 
-    func addOrUpdateSelectedPodspecDependency(name: String? = nil, versionRequirement: String? = nil) {
-        guard let info = selectedComponentInfo else {
+    struct DependencyCandidate: Identifiable, Hashable {
+        let name: String
+        let version: String
+        let isLocal: Bool
+
+        var id: String { name }
+    }
+
+    func availableDependencyCandidates(excluding selfName: String) -> [DependencyCandidate] {
+        var map: [String: (version: String, isLocal: Bool)] = [:]
+        for spec in componentPodspecs where spec.name != selfName {
+            map[spec.name] = (spec.version, true)
+        }
+        for remote in binaryComponents where remote.name != selfName {
+            if map[remote.name] == nil, let latest = remote.versions.first {
+                map[remote.name] = (latest, false)
+            }
+        }
+        return map.map { DependencyCandidate(name: $0.key, version: $0.value.version, isLocal: $0.value.isLocal) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func ensureComponentConfigTableLoaded(for componentName: String) {
+        guard let info = localPodspecInfo(named: componentName) ?? selectedComponentInfo,
+              let exampleDir = info.exampleDirectoryURL else {
+            return
+        }
+        let declaredDepNames = Set(info.dependencies.map { $0.name.split(separator: "/").first.map(String.init) ?? $0.name })
+        componentConfigTable = ComponentConfigTable.loadOrBootstrap(
+            from: exampleDir,
+            workspacePodspecs: componentPodspecs,
+            excludingSelfComponent: info.name,
+            defaultEnabledNames: declaredDepNames
+        )
+        hasSavedComponentConfigTable = ComponentConfigTable.exists(in: exampleDir)
+    }
+
+    func addOrUpdatePodspecDependency(
+        for componentName: String? = nil,
+        name: String? = nil,
+        versionRequirement: String? = nil
+    ) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let info else {
             alertMessage = "请先选择一个组件"
             return
         }
@@ -660,7 +702,7 @@ final class AppModel: ObservableObject {
                     table.components[idx].version = targetVersion
                 }
                 componentConfigTable = table
-                _ = saveComponentExampleConfigTable()
+                _ = saveComponentExampleConfigTable(for: info.name)
             }
             refreshProject()
         } catch {
@@ -668,8 +710,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func removeSelectedPodspecDependency(_ depName: String) {
-        guard let info = selectedComponentInfo else { return }
+    func addOrUpdateSelectedPodspecDependency(name: String? = nil, versionRequirement: String? = nil) {
+        addOrUpdatePodspecDependency(for: nil, name: name, versionRequirement: versionRequirement)
+    }
+
+    func removePodspecDependency(for componentName: String? = nil, depName: String) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let info else { return }
         do {
             try PodspecInspector.removeDependency(in: info.podspecURL, name: depName)
             refreshProject()
@@ -678,9 +725,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func removeSelectedPodspecDependency(_ depName: String) {
+        removePodspecDependency(for: nil, depName: depName)
+    }
+
     @discardableResult
-    func saveComponentExampleConfigTable() -> Bool {
-        guard let info = selectedComponentInfo,
+    func saveComponentExampleConfigTable(for componentName: String? = nil) -> Bool {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let info,
               let exampleDir = info.exampleDirectoryURL else {
             alertMessage = "当前组件未包含 Example 工程目录"
             return false
@@ -707,8 +759,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func syncPodspecDependenciesToComponentExampleConfig() {
-        guard let info = selectedComponentInfo else { return }
+    func syncPodspecDependenciesToComponentExampleConfig(for componentName: String? = nil) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        guard let info else { return }
         let declared = Dictionary(uniqueKeysWithValues: info.dependencies.map {
             (String($0.name.split(separator: "/").first ?? Substring($0.name)), $0.versionRequirement)
         })
@@ -723,37 +776,89 @@ final class AppModel: ObservableObject {
             }
         }
         componentConfigTable = table
-        _ = saveComponentExampleConfigTable()
+        _ = saveComponentExampleConfigTable(for: info.name)
     }
 
-    func updateComponentExampleEntryVersion(_ depName: String, to version: String) {
+    func updateComponentExampleEntryVersion(_ depName: String, to version: String, for componentName: String? = nil) {
         guard var table = componentConfigTable,
               let idx = table.components.firstIndex(where: { $0.name == depName }) else { return }
         table.components[idx].version = version.trimmingCharacters(in: .whitespacesAndNewlines)
         componentConfigTable = table
-        _ = saveComponentExampleConfigTable()
+        _ = saveComponentExampleConfigTable(for: componentName)
     }
 
-    func updateComponentExampleEntryEnabled(_ depName: String, enabled: Bool) {
+    func updateComponentExampleEntryEnabled(_ depName: String, enabled: Bool, for componentName: String? = nil) {
         guard var table = componentConfigTable,
               let idx = table.components.firstIndex(where: { $0.name == depName }) else { return }
         table.components[idx].enabled = enabled
         componentConfigTable = table
-        _ = saveComponentExampleConfigTable()
+        _ = saveComponentExampleConfigTable(for: componentName)
     }
 
-    func switchComponentExampleDepMode(_ depName: String, to mode: String) {
-        let compName = selectedComponentInfo?.name ?? ""
+    func switchComponentExampleDepMode(_ depName: String, to mode: String, for componentName: String? = nil) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        let compName = info?.name ?? ""
         if var table = componentConfigTable,
            let idx = table.components.firstIndex(where: { $0.name == depName }) {
             table.components[idx].mode = mode
             componentConfigTable = table
-            guard saveComponentExampleConfigTable() else { return }
+            guard saveComponentExampleConfigTable(for: compName) else { return }
         }
         if autoInstallComponentExampleAfterSwitch {
-            guard let exampleDir = selectedComponentInfo?.exampleDirectoryURL else { return }
+            guard let exampleDir = info?.exampleDirectoryURL else { return }
             run([BinCommandBuilder.install()], in: exampleDir, scope: .component(name: compName))
         }
+    }
+
+    func updateComponentExampleEntryLocalPath(_ depName: String, path: String, for componentName: String? = nil) {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        let compName = info?.name ?? ""
+        let cleanPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if var table = componentConfigTable,
+           let idx = table.components.firstIndex(where: { $0.name == depName }) {
+            table.components[idx].mode = "local"
+            table.components[idx].path = cleanPath
+            componentConfigTable = table
+            guard saveComponentExampleConfigTable(for: compName) else { return }
+        }
+        if autoInstallComponentExampleAfterSwitch {
+            guard let exampleDir = info?.exampleDirectoryURL else { return }
+            run([BinCommandBuilder.install()], in: exampleDir, scope: .component(name: compName))
+        }
+    }
+
+    func chooseExampleLocalDirectory(for depName: String, in componentName: String? = nil, initialPath: String? = nil) -> String? {
+        let info = (componentName != nil ? localPodspecInfo(named: componentName!) : nil) ?? selectedComponentInfo
+        let panel = NSOpenPanel()
+        panel.title = "选择 \(depName) 对应的本地源码目录"
+        panel.prompt = "选择"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+
+        if let initialPath, !initialPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let expanded = (initialPath as NSString).expandingTildeInPath
+            let url: URL? = expanded.hasPrefix("/")
+                ? URL(fileURLWithPath: expanded)
+                : info?.exampleDirectoryURL?.appendingPathComponent(expanded).standardizedFileURL
+            if let url, FileManager.default.fileExists(atPath: url.path) {
+                panel.directoryURL = url
+            }
+        } else if let exampleDir = info?.exampleDirectoryURL {
+            panel.directoryURL = exampleDir.deletingLastPathComponent().deletingLastPathComponent()
+        }
+
+        guard panel.runModal() == .OK, let selectedURL = panel.url else { return nil }
+
+        if let exampleDir = info?.exampleDirectoryURL {
+            let rel = ComponentConfigTable.relativePath(from: exampleDir, to: selectedURL)
+            if rel.components(separatedBy: "../").count > 4 {
+                return selectedURL.path
+            }
+            return rel
+        }
+        return selectedURL.path
     }
 
     func switchAllComponentExampleDeps(to mode: String) {
