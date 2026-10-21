@@ -1035,6 +1035,82 @@ final class AppModel: ObservableObject {
         if let branch { table.components[idx].branch = branch.trimmingCharacters(in: .whitespacesAndNewlines) }
         configTable = table
         _ = saveConfigTable()
+        if autoInstallAfterSwitch {
+            guard let appDir = requireAppDirectory() else { return }
+            run([BinCommandBuilder.install()], in: appDir, scope: .app)
+        }
+    }
+
+    func chooseLocalDirectory(for componentName: String, initialPath: String? = nil) -> String? {
+        let panel = NSOpenPanel()
+        panel.title = "选择组件 \(componentName) 对应的本地源码目录"
+        panel.prompt = "选择"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+
+        if let initialPath, !initialPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let expanded = (initialPath as NSString).expandingTildeInPath
+            let url: URL? = expanded.hasPrefix("/")
+                ? URL(fileURLWithPath: expanded)
+                : selectedAppDirectory?.appendingPathComponent(expanded).standardizedFileURL
+            if let url, FileManager.default.fileExists(atPath: url.path) {
+                panel.directoryURL = url
+            }
+        } else if let appDir = selectedAppDirectory {
+            panel.directoryURL = appDir.deletingLastPathComponent()
+        }
+
+        guard panel.runModal() == .OK, let selectedURL = panel.url else { return nil }
+
+        if let appDir = selectedAppDirectory {
+            let rel = ComponentConfigTable.relativePath(from: appDir, to: selectedURL)
+            // 若跨盘或向上跨层级过多（如超过4层），直接返回完整绝对路径以确保稳定性
+            if rel.components(separatedBy: "../").count > 4 {
+                return selectedURL.path
+            }
+            return rel
+        }
+        return selectedURL.path
+    }
+
+    func updateConfigEntryLocalPath(_ componentName: String, path: String) {
+        let cleanPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var table = configTable,
+              let idx = table.components.firstIndex(where: { $0.name == componentName }) else { return }
+        table.components[idx].mode = "local"
+        table.components[idx].path = cleanPath
+        configTable = table
+        _ = saveConfigTable()
+
+        // 尝试解析并加载该组件的 podspec，支持分散在不同本地目录的组件被工作台快速识别
+        if let appDir = selectedAppDirectory {
+            let expanded = (cleanPath as NSString).expandingTildeInPath
+            let resolvedDir = expanded.hasPrefix("/")
+                ? URL(fileURLWithPath: expanded)
+                : appDir.appendingPathComponent(expanded).standardizedFileURL
+            let candidateSpec = resolvedDir.appendingPathComponent("\(componentName).podspec")
+            let targetSpecURL: URL? = FileManager.default.fileExists(atPath: candidateSpec.path)
+                ? candidateSpec
+                : (try? FileManager.default.contentsOfDirectory(atPath: resolvedDir.path))?
+                    .first(where: { $0.hasSuffix(".podspec") })
+                    .map { resolvedDir.appendingPathComponent($0) }
+
+            if let specURL = targetSpecURL, let info = try? PodspecInspector.inspect(specURL) {
+                if let existingIdx = componentPodspecs.firstIndex(where: { $0.name == componentName }) {
+                    componentPodspecs[existingIdx] = info
+                } else {
+                    componentPodspecs.append(info)
+                    componentPodspecs.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                }
+            }
+        }
+
+        if autoInstallAfterSwitch {
+            guard let appDir = requireAppDirectory() else { return }
+            run([BinCommandBuilder.install()], in: appDir, scope: .app)
+        }
     }
 
     func updateComponentExampleEntryBranch(_ componentName: String, git: String?, branch: String?) {

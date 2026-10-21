@@ -343,13 +343,21 @@ private struct ComponentConfigTableView: View {
 // MARK: - 极简单行组件依赖卡片 (ComponentConfigCard)
 
 private struct ComponentConfigCard: View {
+    enum ModeConfigSheet: String, Identifiable {
+        case branch
+        case local
+
+        var id: String { rawValue }
+    }
+
     @EnvironmentObject private var model: AppModel
     @Environment(\.openWindow) private var openWindow
     let entry: ComponentConfigEntry
+    @State private var activeModeConfig: ModeConfigSheet?
     @State private var versionDraft: String = ""
-    @State private var isBranchPopoverPresented = false
     @State private var branchDraft = ""
     @State private var gitURLDraft = ""
+    @State private var localPathDraft = ""
 
     var body: some View {
         let localInfo = model.localPodspecInfo(named: entry.name)
@@ -417,10 +425,38 @@ private struct ComponentConfigCard: View {
                         Text("分支: \(b)")
                             .font(.system(size: 12.5, weight: .medium, design: .monospaced))
                             .foregroundStyle(.purple)
+                    } else if entry.mode == "local" {
+                        HStack(spacing: 4) {
+                            Text("本地路径: \(entry.path ?? "未配置")")
+                                .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                                .foregroundStyle(entry.path == nil || entry.path?.isEmpty == true ? .red : .secondary)
+
+                            Button {
+                                initLocalPathDraft()
+                                activeModeConfig = .local
+                            } label: {
+                                Image(systemName: "folder.badge.gearshape")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.borderless)
+                            .help("更改本地组件源码目录")
+                        }
                     } else if let path = entry.path {
-                        Text("路径: \(path)")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            Text("路径: \(path)")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                initLocalPathDraft()
+                                activeModeConfig = .local
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 10))
+                            }
+                            .buttonStyle(.borderless)
+                            .help("配置本地目录并切换为本地")
+                        }
                     }
                 }
             }
@@ -432,7 +468,12 @@ private struct ComponentConfigCard: View {
                 get: { entry.mode },
                 set: { newMode in
                     if newMode == "branch" {
-                        isBranchPopoverPresented = true
+                        branchDraft = entry.branch ?? "main"
+                        gitURLDraft = entry.git ?? ""
+                        activeModeConfig = .branch
+                    } else if newMode == "local" {
+                        initLocalPathDraft()
+                        activeModeConfig = .local
                     } else {
                         model.switchLocalComponent(entry.name, to: newMode)
                     }
@@ -445,31 +486,12 @@ private struct ComponentConfigCard: View {
             }
             .pickerStyle(.segmented)
             .frame(width: 280)
-            .popover(isPresented: $isBranchPopoverPresented) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("配置 \(entry.name) Git 分支源码")
-                        .font(.headline)
-                    TextField("Git 仓库地址 (如 https://git.xx.com/foo.git)", text: $gitURLDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 300)
-                    TextField("分支名 (如 feature/dev)", text: $branchDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 300)
-                    HStack {
-                        Button("取消") { isBranchPopoverPresented = false }
-                        Spacer()
-                        Button("应用分支") {
-                            model.updateConfigEntryBranch(entry.name, git: gitURLDraft, branch: branchDraft)
-                            isBranchPopoverPresented = false
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(branchDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                }
-                .padding()
-                .onAppear {
-                    gitURLDraft = entry.git ?? ""
-                    branchDraft = entry.branch ?? "main"
+            .popover(item: $activeModeConfig) { sheet in
+                switch sheet {
+                case .branch:
+                    branchPopoverView
+                case .local:
+                    localPathPopoverView
                 }
             }
 
@@ -484,13 +506,189 @@ private struct ComponentConfigCard: View {
             .help("在组件工作台管理与发布 \(entry.name)")
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .padding(.vertical, 12)
+        .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
         )
+    }
+
+    private var branchPopoverView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("配置 \(entry.name) Git 分支源码")
+                .font(.headline)
+            TextField("Git 仓库地址 (如 https://git.xx.com/foo.git)", text: $gitURLDraft)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 320)
+            TextField("分支名 (如 feature/dev)", text: $branchDraft)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 320)
+            HStack {
+                Button("取消") { activeModeConfig = nil }
+                Spacer()
+                Button("应用分支") {
+                    model.updateConfigEntryBranch(entry.name, git: gitURLDraft, branch: branchDraft)
+                    activeModeConfig = nil
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(branchDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 360)
+        .onAppear {
+            gitURLDraft = entry.git ?? ""
+            branchDraft = entry.branch ?? "main"
+        }
+    }
+
+    private var localPathPopoverView: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder.badge.gearshape.fill")
+                    .font(.title2)
+                    .foregroundStyle(Color.accentColor)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("选择 \(entry.name) 本地组件目录")
+                        .font(.headline)
+                    Text("组件可位于本机任意目录，不要求在同一工作区。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("本地源码目录：")
+                    .font(.caption.bold())
+
+                HStack(spacing: 8) {
+                    TextField("输入或选择目录路径 (如 /Users/.../\(entry.name) 或 ../\(entry.name))", text: $localPathDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 320)
+
+                    Button {
+                        if let chosen = model.chooseLocalDirectory(for: entry.name, initialPath: localPathDraft) {
+                            localPathDraft = chosen
+                        }
+                    } label: {
+                        Label("选择目录…", systemImage: "folder")
+                    }
+                }
+
+                Button {
+                    if let chosen = model.chooseLocalDirectory(for: entry.name, initialPath: localPathDraft) {
+                        localPathDraft = chosen
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "folder.badge.plus")
+                        Text("打开 Finder 选择 \(entry.name) 目录…")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .controlSize(.small)
+            }
+
+            // 路径校验与 Podspec 状态反馈
+            let validation = validateLocalPath(localPathDraft)
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: validation.statusIcon)
+                    .foregroundStyle(validation.statusColor)
+                Text(validation.message)
+                    .font(.caption)
+                    .foregroundStyle(validation.statusColor)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(validation.statusColor.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            // 快捷推荐：如果工作区检测到同名组件
+            if let detected = model.componentPodspecs.first(where: { $0.name == entry.name }),
+               let appDir = model.selectedAppDirectory {
+                let detectedRel = ComponentConfigTable.relativePath(from: appDir, to: detected.repositoryURL)
+                if localPathDraft != detectedRel && localPathDraft != detected.repositoryURL.path {
+                    Button {
+                        localPathDraft = detectedRel
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "wand.and.stars")
+                            Text("使用工作区检测到的路径：\(detectedRel)")
+                        }
+                        .font(.caption)
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Button("取消") {
+                    activeModeConfig = nil
+                }
+                Spacer()
+                Button("确定并切换为本地") {
+                    model.updateConfigEntryLocalPath(entry.name, path: localPathDraft)
+                    activeModeConfig = nil
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(localPathDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 440)
+    }
+
+    private func initLocalPathDraft() {
+        if let p = entry.path, !p.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            localPathDraft = p
+        } else if let detected = model.componentPodspecs.first(where: { $0.name == entry.name }),
+                  let appDir = model.selectedAppDirectory {
+            localPathDraft = ComponentConfigTable.relativePath(from: appDir, to: detected.repositoryURL)
+        } else {
+            localPathDraft = ""
+        }
+    }
+
+    private func validateLocalPath(_ path: String) -> (isValid: Bool, message: String, statusIcon: String, statusColor: Color) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return (false, "请点击「选择目录…」或输入该组件在本地的根目录路径", "info.circle", .secondary)
+        }
+
+        let resolvedURL: URL
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        if expanded.hasPrefix("/") {
+            resolvedURL = URL(fileURLWithPath: expanded).standardizedFileURL
+        } else if let appDir = model.selectedAppDirectory {
+            resolvedURL = appDir.appendingPathComponent(expanded).standardizedFileURL
+        } else {
+            resolvedURL = URL(fileURLWithPath: expanded).standardizedFileURL
+        }
+
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: resolvedURL.path, isDirectory: &isDirectory)
+        guard exists && isDirectory.boolValue else {
+            return (false, "目录不存在：\(resolvedURL.path)", "xmark.circle.fill", .red)
+        }
+
+        let exactPodspec = resolvedURL.appendingPathComponent("\(entry.name).podspec")
+        if FileManager.default.fileExists(atPath: exactPodspec.path) {
+            return (true, "已验证：检测到 \(entry.name).podspec", "checkmark.circle.fill", .green)
+        }
+
+        if let files = try? FileManager.default.contentsOfDirectory(atPath: resolvedURL.path),
+           let otherSpec = files.first(where: { $0.hasSuffix(".podspec") }) {
+            return (true, "已验证：检测到规格文件 \(otherSpec)", "checkmark.circle.fill", .green)
+        }
+
+        return (true, "提示：目录存在，但未在该层级检测到 .podspec，请确认是否为组件根目录", "exclamationmark.triangle.fill", .orange)
     }
 }
 

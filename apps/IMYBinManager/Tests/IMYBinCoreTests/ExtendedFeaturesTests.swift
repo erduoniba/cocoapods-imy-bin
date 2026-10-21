@@ -199,3 +199,42 @@ import Testing
     #expect(imported.components[0].mode == "branch")
     #expect(imported.components[0].branch == "feat/x")
 }
+
+@Test func configTableSupportsDistinctLocalDirectoriesPerComponent() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("MultiDirTest-\(UUID().uuidString)")
+    let appDir = tmpDir.appendingPathComponent("HostApp")
+    let compADir = tmpDir.appendingPathComponent("WorkspacePods/PodA")
+    let compBDir = FileManager.default.temporaryDirectory.appendingPathComponent("ExternalRepos/PodB-\(UUID().uuidString)")
+
+    try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: compADir, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: compBDir, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: tmpDir)
+        try? FileManager.default.removeItem(at: compBDir)
+    }
+
+    let relPathA = ComponentConfigTable.relativePath(from: appDir, to: compADir)
+    let absPathB = compBDir.path
+
+    let table = ComponentConfigTable(
+        project: "HostApp",
+        components: [
+            ComponentConfigEntry(name: "PodA", version: "1.0.0", mode: "local", path: relPathA, enabled: true),
+            ComponentConfigEntry(name: "PodB", version: "2.0.0", mode: "local", path: absPathB, enabled: true)
+        ]
+    )
+    try table.write(to: appDir)
+
+    let loaded = try ComponentConfigTable.read(from: appDir)
+    let reloadedTable = try #require(loaded)
+    #expect(reloadedTable.components.count == 2)
+    let entryA = try #require(reloadedTable.components.first(where: { $0.name == "PodA" }))
+    let entryB = try #require(reloadedTable.components.first(where: { $0.name == "PodB" }))
+    #expect(entryA.mode == "local")
+    #expect(entryA.path == relPathA)
+    #expect(entryA.supportsLocal == true)
+    #expect(entryB.mode == "local")
+    #expect(entryB.path == absPathB)
+    #expect(entryB.supportsLocal == true)
+}
