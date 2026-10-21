@@ -172,7 +172,21 @@ final class AppModel: ObservableObject {
     @Published private(set) var isRefreshingBinaryServer = false
     @Published private(set) var binaryServerError: String?
     @Published private(set) var binaryServerCheckedAt: Date?
+    @Published var alertTitle: String = "提示"
     @Published var alertMessage: String?
+
+    func showAlert(title: String, message: String) {
+        alertTitle = title
+        alertMessage = message
+    }
+
+    func playNotificationSound(success: Bool) {
+        if success {
+            NSSound(named: "Glass")?.play()
+        } else {
+            NSSound(named: "Basso")?.play()
+        }
+    }
 
     private static let binaryServerAddressKey = "binaryServerAddress"
     private static let customCPHomeDirKey = "IMYBinManager.customCPHomeDir"
@@ -1477,10 +1491,83 @@ final class AppModel: ObservableObject {
                     }
                 }
                 try taskHistory.finish(taskID, exitCode: finalExitCode)
+
+                if finalExitCode == 0 {
+                    playNotificationSound(success: true)
+                    let compName: String
+                    switch scope {
+                    case .component(let name):
+                        compName = name
+                    case .app:
+                        compName = ""
+                    }
+
+                    if commands.contains(where: { $0.taskKind == .publish }) {
+                        if commands.contains(where: { $0.displayCommand.contains("--dry-run") }) {
+                            showAlert(
+                                title: "预检通过",
+                                message: "组件 \(compName.isEmpty ? "目标组件" : compName) 发布预检 (--dry-run) 执行通过！"
+                            )
+                        } else {
+                            let ver = localPodspecInfo(named: compName)?.version ?? ""
+                            let verSuffix = ver.isEmpty ? "" : " (v\(ver))"
+                            showAlert(
+                                title: "发布成功",
+                                message: "🎉 组件 \(compName.isEmpty ? "目标组件" : compName)\(verSuffix) 二进制发布成功！\n制品已上传至制品库，源码与二进制 Spec 已同步更新。"
+                            )
+                        }
+                    } else if commands.contains(where: { $0.taskKind == .install }) {
+                        showAlert(
+                            title: "安装成功",
+                            message: "🎉 CocoaPods 依赖安装成功！已成功同步配置并完成安装。"
+                        )
+                    } else if commands.contains(where: { $0.taskKind == .archive }) {
+                        showAlert(
+                            title: "构建成功",
+                            message: "🎉 组件 \(compName.isEmpty ? "目标组件" : compName) 二进制 XCFramework 归档构建完成！"
+                        )
+                    } else if commands.contains(where: { $0.taskKind == .update }) {
+                        showAlert(
+                            title: "更新成功",
+                            message: "🎉 CocoaPods 依赖更新成功！"
+                        )
+                    } else {
+                        showAlert(
+                            title: "执行成功",
+                            message: "任务「\(combinedTitle)」已成功完成。"
+                        )
+                    }
+                } else {
+                    playNotificationSound(success: false)
+                    switch scope {
+                    case .app:
+                        isAppLogDrawerExpanded = true
+                    case .component:
+                        isComponentLogDrawerExpanded = true
+                    }
+                    showAlert(
+                        title: "执行失败",
+                        message: "❌ 任务「\(combinedTitle)」执行失败（退出码: \(finalExitCode)）。\n已自动为您展开控制台日志，请检查报错详情。"
+                    )
+                }
             } catch is CancellationError {
                 try? taskHistory.cancel(taskID)
+                showAlert(
+                    title: "任务已取消",
+                    message: "已终止任务「\(combinedTitle)」的执行。"
+                )
             } catch {
-                alertMessage = error.localizedDescription
+                playNotificationSound(success: false)
+                switch scope {
+                case .app:
+                    isAppLogDrawerExpanded = true
+                case .component:
+                    isComponentLogDrawerExpanded = true
+                }
+                showAlert(
+                    title: "执行出错",
+                    message: "❌ 任务「\(combinedTitle)」发生错误：\(error.localizedDescription)"
+                )
                 try? taskHistory.fail(taskID, summary: error.localizedDescription)
             }
             processRunners[scope] = nil

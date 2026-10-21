@@ -34,11 +34,17 @@ struct ContentView: View {
             ToolboxSheetView()
                 .frame(minWidth: 720, minHeight: 540)
         }
-        .alert("提示", isPresented: Binding(
+        .alert(model.alertTitle, isPresented: Binding(
             get: { model.alertMessage != nil },
-            set: { if !$0 { model.alertMessage = nil } }
+            set: { if !$0 {
+                model.alertMessage = nil
+                model.alertTitle = "提示"
+            }}
         )) {
-            Button("好", role: .cancel) { model.alertMessage = nil }
+            Button("好", role: .cancel) {
+                model.alertMessage = nil
+                model.alertTitle = "提示"
+            }
         } message: {
             Text(model.alertMessage ?? "")
         }
@@ -931,11 +937,17 @@ struct ComponentWorkspaceView: View {
                 model.selectedPodspec = info.podspecURL
             }
         }
-        .alert("提示", isPresented: Binding(
+        .alert(model.alertTitle, isPresented: Binding(
             get: { model.alertMessage != nil },
-            set: { if !$0 { model.alertMessage = nil } }
+            set: { if !$0 {
+                model.alertMessage = nil
+                model.alertTitle = "提示"
+            }}
         )) {
-            Button("好", role: .cancel) { model.alertMessage = nil }
+            Button("好", role: .cancel) {
+                model.alertMessage = nil
+                model.alertTitle = "提示"
+            }
         } message: {
             Text(model.alertMessage ?? "")
         }
