@@ -113,6 +113,139 @@ public struct BinaryServerClient: Sendable {
         return url
     }
 
+    public static func configTableURL(from address: String, project: String? = nil, subpath: String? = nil) throws -> URL {
+        let base = try frameworksURL(from: address).deletingLastPathComponent()
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            throw BinaryServerClientError.invalidAddress
+        }
+        let cleanPath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let prefix = cleanPath.isEmpty ? "" : "/\(cleanPath)"
+        if let project, !project.isEmpty {
+            if let subpath, !subpath.isEmpty {
+                components.path = "\(prefix)/api/v1/config-tables/\(project)/\(subpath)"
+            } else {
+                components.path = "\(prefix)/api/v1/config-tables/\(project)"
+            }
+        } else {
+            components.path = "\(prefix)/api/v1/config-tables"
+        }
+        guard let url = components.url else {
+            throw BinaryServerClientError.invalidAddress
+        }
+        return url
+    }
+
+    public func listConfigTables(address: String, token: String? = nil) async throws -> [ComponentConfigTable] {
+        let url = try Self.configTableURL(from: address)
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BinaryServerClientError.unexpectedResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data.prefix(500), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BinaryServerClientError.httpStatus(httpResponse.statusCode, message)
+        }
+        return try JSONDecoder().decode([ComponentConfigTable].self, from: data)
+    }
+
+    public func fetchConfigTable(address: String, project: String, token: String? = nil) async throws -> ComponentConfigTable {
+        let url = try Self.configTableURL(from: address, project: project)
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BinaryServerClientError.unexpectedResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data.prefix(500), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BinaryServerClientError.httpStatus(httpResponse.statusCode, message)
+        }
+        return try JSONDecoder().decode(ComponentConfigTable.self, from: data)
+    }
+
+    public func pushConfigTable(address: String, table: ComponentConfigTable, token: String? = nil) async throws -> ComponentConfigTable {
+        let url = try Self.configTableURL(from: address, project: table.project)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try JSONEncoder().encode(table)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BinaryServerClientError.unexpectedResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data.prefix(500), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BinaryServerClientError.httpStatus(httpResponse.statusCode, message)
+        }
+        return try JSONDecoder().decode(ComponentConfigTable.self, from: data)
+    }
+
+    public func duplicateConfigTable(
+        address: String,
+        project: String,
+        targetProject: String? = nil,
+        sourceColumn: String? = nil,
+        targetColumn: String? = nil,
+        description: String? = nil,
+        setActive: Bool? = nil,
+        token: String? = nil
+    ) async throws -> ComponentConfigTable {
+        let url = try Self.configTableURL(from: address, project: project, subpath: "duplicate")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        struct DuplicatePayload: Encodable {
+            let targetProject: String?
+            let sourceColumn: String?
+            let targetColumn: String?
+            let description: String?
+            let setActive: Bool?
+        }
+        request.httpBody = try JSONEncoder().encode(DuplicatePayload(
+            targetProject: targetProject,
+            sourceColumn: sourceColumn,
+            targetColumn: targetColumn,
+            description: description,
+            setActive: setActive
+        ))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BinaryServerClientError.unexpectedResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data.prefix(500), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BinaryServerClientError.httpStatus(httpResponse.statusCode, message)
+        }
+        return try JSONDecoder().decode(ComponentConfigTable.self, from: data)
+    }
+
     public func fetchActivePolicy(address: String, project: String, token: String? = nil) async throws -> ManagedPolicySnapshot {
         let url = try Self.policyURL(from: address, project: project, subpath: "active")
         return try await fetchPolicy(from: url, token: token)

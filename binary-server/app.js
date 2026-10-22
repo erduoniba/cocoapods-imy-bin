@@ -11,6 +11,7 @@ const BuildJob = require('./server/models/build_job')
 const Project = require('./server/models/project')
 const ProjectPolicyRevision = require('./server/models/project_policy')
 const AuditEvent = require('./server/models/audit_event')
+const ConfigTable = require('./server/models/config_table')
 const { createPlatformRouter } = require('./server/platform/routes')
 const { createEnterpriseRouter } = require('./server/enterprise/dashboard')
 
@@ -54,6 +55,7 @@ async function start() {
     serverSelectionTimeoutMS: config.mongodbServerSelectionTimeoutMs,
   })
   await Component.init()
+  await ConfigTable.init()
   if (config.platformEnabled) {
     await Promise.all([Release.init(), BuildJob.init(), Project.init(), ProjectPolicyRevision.init(), AuditEvent.init()])
   }

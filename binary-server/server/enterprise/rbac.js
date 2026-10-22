@@ -3,11 +3,13 @@
 const crypto = require('crypto')
 
 const ROLE_PERMISSIONS = {
-  developer: ['artifact:read', 'policy:read', 'telemetry:write', 'quality:check'],
+  developer: ['artifact:read', 'policy:read', 'config:read', 'telemetry:write', 'quality:check'],
   maintainer: [
     'artifact:read',
     'artifact:publish',
     'policy:read',
+    'config:read',
+    'config:write',
     'telemetry:write',
     'quality:check',
     'job:enqueue',
@@ -18,6 +20,8 @@ const ROLE_PERMISSIONS = {
     'policy:read',
     'policy:write',
     'policy:activate',
+    'config:read',
+    'config:write',
     'telemetry:read',
     'telemetry:write',
     'quality:check',

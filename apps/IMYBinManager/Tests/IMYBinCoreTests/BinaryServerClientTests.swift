@@ -30,3 +30,11 @@ import Testing
         try BinaryServerClient.decodeComponents(from: Data(#"[{"name":"PodA"}]"#.utf8))
     }
 }
+
+@Test func binaryServerBuildsConfigTableURLs() throws {
+    let base = "http://localhost:8080"
+    #expect(try BinaryServerClient.configTableURL(from: base).absoluteString == "http://localhost:8080/api/v1/config-tables")
+    #expect(try BinaryServerClient.configTableURL(from: base, project: "HDImyBinApp").absoluteString == "http://localhost:8080/api/v1/config-tables/HDImyBinApp")
+    #expect(try BinaryServerClient.configTableURL(from: base, project: "HDImyBinApp", subpath: "duplicate").absoluteString == "http://localhost:8080/api/v1/config-tables/HDImyBinApp/duplicate")
+    #expect(try BinaryServerClient.configTableURL(from: base, project: "HDImyBinApp", subpath: "export").absoluteString == "http://localhost:8080/api/v1/config-tables/HDImyBinApp/export")
+}
