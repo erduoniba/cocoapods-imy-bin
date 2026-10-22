@@ -28,58 +28,103 @@ module CBin
       raise Pod::Informative, "无法解析配置表 #{filename}: #{error.message}"
     end
 
-    def self.validate!(payload, filename: FILENAME)
-      unless payload.is_a?(Hash) && payload['components'].is_a?(Array)
-        raise Pod::Informative, "配置表 #{filename} 格式无效，缺少 components 数组."
+    def self.normalize_entry(entry, default_mode: 'binary', filename: FILENAME)
+      unless entry.is_a?(Hash)
+        raise Pod::Informative, "配置表 #{filename} 中的组件项必须是对象."
+      end
+      name = entry['name'].to_s.strip
+      mode = (entry['mode'] || default_mode || 'binary').to_s.strip
+      version = entry['version']&.to_s&.strip
+      local_path = entry['path']&.to_s&.strip
+      git_url = entry['git']&.to_s&.strip
+      branch = entry['branch']&.to_s&.strip
+      tag = entry['tag']&.to_s&.strip
+      commit = entry['commit']&.to_s&.strip
+      targets = entry['targets']
+      targets = targets.map { |t| t.to_s.strip }.reject(&:empty?) if targets.is_a?(Array)
+      enabled = entry.key?('enabled') ? !!entry['enabled'] : true
+
+      unless CBin::PodModes.valid_name?(name) && CBin::PodModes::MODES.include?(mode)
+        raise Pod::Informative, "配置表 #{filename} 中组件 #{name.inspect} 的名称或模式 #{mode.inspect} 无效."
+      end
+      if enabled && mode == 'local' && local_path.to_s.empty?
+        raise Pod::Informative, "配置表 #{filename} 中组件 #{name} 为 local 模式，但未配置本地 path."
+      end
+      if enabled && mode == 'branch' && git_url.to_s.empty? && branch.to_s.empty? && tag.to_s.empty? && commit.to_s.empty?
+        raise Pod::Informative, "配置表 #{filename} 中组件 #{name} 为 branch 模式，但未配置 git 或 branch/tag."
       end
 
-      seen = []
-      normalized_components = payload['components'].map do |entry|
-        unless entry.is_a?(Hash)
-          raise Pod::Informative, "配置表 #{filename} 中的组件项必须是对象."
-        end
-        name = entry['name'].to_s.strip
-        mode = (entry['mode'] || payload['defaultMode'] || 'binary').to_s.strip
-        version = entry['version']&.to_s&.strip
-        local_path = entry['path']&.to_s&.strip
-        git_url = entry['git']&.to_s&.strip
-        branch = entry['branch']&.to_s&.strip
-        tag = entry['tag']&.to_s&.strip
-        commit = entry['commit']&.to_s&.strip
-        targets = entry['targets']
-        targets = targets.map { |t| t.to_s.strip }.reject(&:empty?) if targets.is_a?(Array)
-        enabled = entry.key?('enabled') ? !!entry['enabled'] : true
+      {
+        'name' => name,
+        'version' => (version && !version.empty?) ? version : nil,
+        'mode' => mode,
+        'path' => (local_path && !local_path.empty?) ? local_path : nil,
+        'git' => (git_url && !git_url.empty?) ? git_url : nil,
+        'branch' => (branch && !branch.empty?) ? branch : nil,
+        'tag' => (tag && !tag.empty?) ? tag : nil,
+        'commit' => (commit && !commit.empty?) ? commit : nil,
+        'targets' => (targets && !targets.empty?) ? targets : nil,
+        'enabled' => enabled
+      }.compact
+    end
 
-        unless CBin::PodModes.valid_name?(name) && CBin::PodModes::MODES.include?(mode)
-          raise Pod::Informative, "配置表 #{filename} 中组件 #{name.inspect} 的名称或模式 #{mode.inspect} 无效."
-        end
-        raise Pod::Informative, "配置表 #{filename} 重复声明组件 #{name}." if seen.include?(name)
-        if enabled && mode == 'local' && local_path.to_s.empty?
-          raise Pod::Informative, "配置表 #{filename} 中组件 #{name} 为 local 模式，但未配置本地 path."
-        end
-        if enabled && mode == 'branch' && git_url.to_s.empty? && branch.to_s.empty? && tag.to_s.empty? && commit.to_s.empty?
-          raise Pod::Informative, "配置表 #{filename} 中组件 #{name} 为 branch 模式，但未配置 git 或 branch/tag."
-        end
-
-        seen << name
-        {
-          'name' => name,
-          'version' => (version && !version.empty?) ? version : nil,
-          'mode' => mode,
-          'path' => (local_path && !local_path.empty?) ? local_path : nil,
-          'git' => (git_url && !git_url.empty?) ? git_url : nil,
-          'branch' => (branch && !branch.empty?) ? branch : nil,
-          'tag' => (tag && !tag.empty?) ? tag : nil,
-          'commit' => (commit && !commit.empty?) ? commit : nil,
-          'targets' => (targets && !targets.empty?) ? targets : nil,
-          'enabled' => enabled
-        }.compact
+    def self.validate!(payload, filename: FILENAME)
+      unless payload.is_a?(Hash) && (payload['components'].is_a?(Array) || payload['columns'].is_a?(Array))
+        raise Pod::Informative, "配置表 #{filename} 格式无效，缺少 components 或 columns 数组."
       end
 
       default_mode = (payload['defaultMode'] || 'binary').to_s
       default_mode = 'binary' unless CBin::PodModes::MODES.include?(default_mode)
 
-      {
+      # 支持版本列（columns）概念与 activeColumn 解析
+      columns = payload['columns']
+      active_column = (ENV['IMY_BIN_CONFIG_COLUMN'] || payload['activeColumn']).to_s.strip
+      normalized_columns = nil
+
+      if columns.is_a?(Array) && !columns.empty?
+        seen_cols = []
+        normalized_columns = columns.map do |col|
+          unless col.is_a?(Hash) && col['name']
+            raise Pod::Informative, "配置表 #{filename} 中的版本列必须是包含 name 的对象."
+          end
+          col_name = col['name'].to_s.strip
+          raise Pod::Informative, "配置表 #{filename} 重复声明版本列 #{col_name}." if seen_cols.include?(col_name)
+          seen_cols << col_name
+
+          col_desc = col['description']&.to_s&.strip
+          col_components = (col['components'].is_a?(Array) ? col['components'] : []).map do |entry|
+            normalize_entry(entry, default_mode: default_mode, filename: filename)
+          end
+          {
+            'name' => col_name,
+            'description' => (col_desc && !col_desc.empty?) ? col_desc : nil,
+            'createdAt' => col['createdAt'],
+            'updatedAt' => col['updatedAt'],
+            'components' => col_components
+          }.compact
+        end
+
+        active_column = normalized_columns.first['name'] if active_column.empty?
+        active_col = normalized_columns.find { |c| c['name'] == active_column }
+        if active_col && (payload['components'].nil? || payload['components'].empty?)
+          raw_components = active_col['components']
+        else
+          raw_components = payload['components'] || (active_col ? active_col['components'] : [])
+        end
+      else
+        raw_components = payload['components'] || []
+      end
+
+      seen = []
+      normalized_components = raw_components.map do |entry|
+        normalized = normalize_entry(entry, default_mode: default_mode, filename: filename)
+        name = normalized['name']
+        raise Pod::Informative, "配置表 #{filename} 重复声明组件 #{name}." if seen.include?(name)
+        seen << name
+        normalized
+      end
+
+      result = {
         'version' => payload['version'] || 1,
         'project' => (payload['project'] || File.basename(File.expand_path(filename).sub(/\/#{Regexp.escape(FILENAME)}\z/, ''))).to_s,
         'environment' => (payload['environment'] || 'dev').to_s,
@@ -87,6 +132,9 @@ module CBin
         'updatedAt' => (payload['updatedAt'] || Time.now.utc.iso8601).to_s,
         'components' => normalized_components
       }
+      result['activeColumn'] = active_column unless active_column.empty?
+      result['columns'] = normalized_columns if normalized_columns
+      result
     end
 
     def self.bootstrap_from_workspace(project_root, default_mode: 'binary')
@@ -126,13 +174,27 @@ module CBin
         end
       end
 
+      sorted_components = components.sort_by { |item| item['name'] }
+      default_col_name = '1.0.0'
+      now = Time.now.utc.iso8601
+
       {
         'version' => 1,
         'project' => is_example && self_pod_name ? "#{self_pod_name}_Example" : root_path.basename.to_s,
         'environment' => 'dev',
         'defaultMode' => default_mode,
-        'updatedAt' => Time.now.utc.iso8601,
-        'components' => components.sort_by { |item| item['name'] }
+        'updatedAt' => now,
+        'activeColumn' => default_col_name,
+        'columns' => [
+          {
+            'name' => default_col_name,
+            'description' => '默认 App 版本列',
+            'createdAt' => now,
+            'updatedAt' => now,
+            'components' => sorted_components
+          }
+        ],
+        'components' => sorted_components
       }
     end
 

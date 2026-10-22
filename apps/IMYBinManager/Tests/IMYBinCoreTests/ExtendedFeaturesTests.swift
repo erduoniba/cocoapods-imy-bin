@@ -239,6 +239,63 @@ import Testing
     #expect(entryB.supportsLocal == true)
 }
 
+@Test func configTableMultiColumnAppVersionsSupport() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("MultiColumnTest-\(UUID().uuidString)")
+    let appDir = tmpDir.appendingPathComponent("HostApp")
+    try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+    var table = ComponentConfigTable(
+        project: "HostApp",
+        components: [
+            ComponentConfigEntry(name: "HDDynamicPod", version: "0.1.0", mode: "binary", enabled: true),
+            ComponentConfigEntry(name: "HDStaticPod", version: "0.1.9", mode: "binary", enabled: true)
+        ]
+    )
+    #expect(table.currentColumnName == "1.0.0")
+    #expect(table.columns?.count == 1)
+
+    // 新建 1.1.0 列并复制当前依赖
+    let created = table.createColumn(name: "1.1.0", description: "App 1.1.0 迭代", copyFromCurrent: true)
+    #expect(created)
+    #expect(table.columns?.count == 2)
+
+    // 切换至 1.1.0 列
+    let switched = table.switchActiveColumn(to: "1.1.0")
+    #expect(switched)
+    #expect(table.currentColumnName == "1.1.0")
+
+    // 修改 1.1.0 列中的版本
+    table.components[0].version = "0.1.5"
+    table.components[0].mode = "source"
+    try table.write(to: appDir)
+
+    // 从磁盘重新读取并验证
+    let reloaded = try ComponentConfigTable.read(from: appDir)
+    let nonNilTable = try #require(reloaded)
+    #expect(nonNilTable.activeColumn == "1.1.0")
+    #expect(nonNilTable.components[0].version == "0.1.5")
+    #expect(nonNilTable.components[0].mode == "source")
+    #expect(nonNilTable.columns?.count == 2)
+
+    // 切换回 1.0.0 列验证旧版本未被污染
+    var switchedBack = nonNilTable
+    switchedBack.switchActiveColumn(to: "1.0.0")
+    #expect(switchedBack.currentColumnName == "1.0.0")
+    #expect(switchedBack.components[0].version == "0.1.0")
+    #expect(switchedBack.components[0].mode == "binary")
+
+    // 重命名列
+    let renamed = switchedBack.renameColumn(from: "1.1.0", to: "1.1.0-release")
+    #expect(renamed)
+    #expect(switchedBack.columns?.contains(where: { $0.name == "1.1.0-release" }) == true)
+
+    // 删除列
+    let deleted = switchedBack.deleteColumn(name: "1.1.0-release")
+    #expect(deleted)
+    #expect(switchedBack.columns?.count == 1)
+}
+
 @Test func podspecDependencyUpsertAndRemove() throws {
     let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("PodspecDepTest-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)

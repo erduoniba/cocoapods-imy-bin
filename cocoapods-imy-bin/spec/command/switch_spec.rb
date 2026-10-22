@@ -142,6 +142,61 @@ module Pod
         stat['mode'].should == 'local'
       end
 
+      it 'supports multi-column app versions and activeColumn switching in .imy-bin-config.json' do
+        Dir.mktmpdir do |root|
+          podfile_path = File.join(root, 'Podfile')
+          File.write(podfile_path, <<~RUBY)
+            plugin 'cocoapods-imy-bin'
+            use_binaries!
+            target 'Demo' do
+              imy_bin_config_dependencies
+            end
+          RUBY
+          CBin::ComponentConfig.write(root, {
+            'version' => 1,
+            'project' => 'Demo',
+            'environment' => 'dev',
+            'defaultMode' => 'binary',
+            'activeColumn' => '1.0.0',
+            'columns' => [
+              {
+                'name' => '1.0.0',
+                'description' => 'App 1.0.0 基线',
+                'components' => [
+                  { 'name' => 'HDDynamicPod', 'version' => '0.1.0', 'mode' => 'binary', 'enabled' => true }
+                ]
+              },
+              {
+                'name' => '1.1.0',
+                'description' => 'App 1.1.0 基线',
+                'components' => [
+                  { 'name' => 'HDDynamicPod', 'version' => '0.1.5', 'mode' => 'source', 'enabled' => true }
+                ]
+              }
+            ]
+          })
+          Config.instance.stubs(:installation_root).returns(Pathname(root))
+          podfile = Podfile.from_file(podfile_path)
+          Config.instance.stubs(:podfile).returns(podfile)
+
+          podfile.effective_mode_for_pod('HDDynamicPod').should == 'binary'
+          target_def = podfile.target_definition_list.find { |t| t.name == 'Pods-Demo' || t.name == 'Demo' }
+          dep = target_def.dependencies.find { |d| d.name == 'HDDynamicPod' }
+          dep.requirement.to_s.should == '= 0.1.0'
+
+          config = CBin::ComponentConfig.read(root)
+          config['activeColumn'] = '1.1.0'
+          config['components'] = []
+          CBin::ComponentConfig.write(root, config)
+
+          podfile2 = Podfile.from_file(podfile_path)
+          podfile2.effective_mode_for_pod('HDDynamicPod').should == 'source'
+          target_def2 = podfile2.target_definition_list.find { |t| t.name == 'Pods-Demo' || t.name == 'Demo' }
+          dep2 = target_def2.dependencies.find { |d| d.name == 'HDDynamicPod' }
+          dep2.requirement.to_s.should == '= 0.1.5'
+        end
+      end
+
       it 'supports branch mode and target filtering via imy_bin_config_dependencies' do
         root = Dir.mktmpdir
         podfile_path = File.join(root, 'Podfile')

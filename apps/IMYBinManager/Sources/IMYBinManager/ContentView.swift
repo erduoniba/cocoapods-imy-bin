@@ -14,17 +14,26 @@ struct ContentView: View {
 
             Divider()
 
-            // 2. 次顶部控制栏（搜索过滤、模式筛选分段、全量快速切换）
+            // 2. App 版本配置列工具条（切换 App 版本列、新建/删除/克隆列、多列矩阵对比切换）
+            AppConfigColumnBar()
+
+            Divider()
+
+            // 3. 次顶部控制栏（搜索过滤、模式筛选分段、全量快速切换）
             AppFilterBar()
 
             Divider()
 
-            // 3. 核心主体：组件依赖列表
-            ComponentConfigTableView()
+            // 4. 核心主体：组件依赖列表 或 多版本列对照矩阵视图
+            if model.showMultiColumnMatrix {
+                MultiColumnMatrixView()
+            } else {
+                ComponentConfigTableView()
+            }
 
             Divider()
 
-            // 4. 底部控制台日志抽屉（折叠为状态条，运行/展开时显示终端控制台）
+            // 5. 底部控制台日志抽屉（折叠为状态条，运行/展开时显示终端控制台）
             ConsoleDrawer(
                 scope: .app,
                 isExpanded: $model.isAppLogDrawerExpanded
@@ -206,6 +215,219 @@ private struct AppTopBar: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar)
+    }
+}
+
+// MARK: - App 版本配置列工具栏 (AppConfigColumnBar)
+
+private struct ColumnPillButton: View {
+    let col: ComponentConfigColumn
+    let isActive: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        if isActive {
+            buttonView
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help(col.description ?? "App \(col.name) 依赖配置列 (当前生效)")
+        } else {
+            buttonView
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help(col.description ?? "App \(col.name) 依赖配置列")
+        }
+    }
+
+    private var buttonView: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 4) {
+                if isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                Text(col.name)
+                    .fontWeight(isActive ? .bold : .regular)
+                if let desc = col.description, !desc.isEmpty {
+                    Text("(\(desc))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+private struct AppConfigColumnBar: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var isShowingCreateSheet = false
+    @State private var newColumnName = ""
+    @State private var newColumnDesc = ""
+    @State private var copyFromCurrent = true
+
+    @State private var isShowingRenameSheet = false
+    @State private var renamingTarget = ""
+    @State private var renamedName = ""
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // 图标与标题
+            HStack(spacing: 6) {
+                Image(systemName: "square.3.layers.3d.down.right")
+                    .foregroundStyle(.tint)
+                Text("App 版本配置列:")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+
+            // 列选择分段/胶囊按钮组
+            if let cols = model.configTable?.columns, !cols.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(cols, id: \ComponentConfigColumn.name) { col in
+                            ColumnPillButton(
+                                col: col,
+                                isActive: col.name == model.configTable?.currentColumnName,
+                                onSelect: {
+                                    if col.name != model.configTable?.currentColumnName {
+                                        model.switchConfigTableColumn(to: col.name)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+                .frame(maxWidth: 480)
+
+                // 列管理菜单（新建/克隆/重命名/删除）
+                Menu {
+                    Button("新建 App 版本列…") {
+                        newColumnName = ""
+                        newColumnDesc = ""
+                        copyFromCurrent = true
+                        isShowingCreateSheet = true
+                    }
+                    Button("克隆当前列为新版本…") {
+                        let cur = model.configTable?.currentColumnName ?? "1.0.0"
+                        newColumnName = "\(cur)-copy"
+                        newColumnDesc = "基于 \(cur) 克隆"
+                        copyFromCurrent = true
+                        isShowingCreateSheet = true
+                    }
+                    Divider()
+                    Button("重命名当前列 (\(model.configTable?.currentColumnName ?? ""))…") {
+                        renamingTarget = model.configTable?.currentColumnName ?? ""
+                        renamedName = renamingTarget
+                        isShowingRenameSheet = true
+                    }
+                    if (model.configTable?.columns?.count ?? 0) > 1 {
+                        Button(role: .destructive) {
+                            if let cur = model.configTable?.currentColumnName {
+                                model.deleteConfigTableColumn(name: cur)
+                            }
+                        } label: {
+                            Text("删除当前列 (\(model.configTable?.currentColumnName ?? ""))")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.2.square")
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 22)
+                .help("配置表列管理（新建/克隆/重命名/删除）")
+            }
+
+            Spacer()
+
+            // 切换单列明细 / 多列版本对照矩阵
+            if model.showMultiColumnMatrix {
+                Button {
+                    model.showMultiColumnMatrix = false
+                } label: {
+                    Label("返回当前列明细", systemImage: "list.bullet")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            } else {
+                Button {
+                    model.showMultiColumnMatrix = true
+                } label: {
+                    Label("多版本列对照矩阵", systemImage: "rectangle.split.3x1")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("在不同 App 版本列之间横向对比组件依赖版本与模式")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.8))
+        .sheet(isPresented: $isShowingCreateSheet) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("新建 App 版本配置列")
+                    .font(.headline)
+                Text("不同 App 版本可以维护各自独立的组件版本号与调试模式。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("版本列名称 (如 1.3.0, release/2.0)")
+                        .font(.caption)
+                    TextField("例如: 1.3.0", text: $newColumnName)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("描述/备注 (可选)")
+                        .font(.caption)
+                    TextField("例如: 1.3.0 正式发版基线", text: $newColumnDesc)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Toggle("复制当前列 (\(model.configTable?.currentColumnName ?? "")) 的组件依赖基线", isOn: $copyFromCurrent)
+                    .toggleStyle(.checkbox)
+
+                HStack {
+                    Button("取消") { isShowingCreateSheet = false }
+                    Spacer()
+                    Button("创建并设为当前生效列") {
+                        model.createConfigTableColumn(name: newColumnName, description: newColumnDesc.isEmpty ? nil : newColumnDesc, copyFromCurrent: copyFromCurrent)
+                        isShowingCreateSheet = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newColumnName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(18)
+            .frame(width: 380)
+        }
+        .sheet(isPresented: $isShowingRenameSheet) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("重命名 App 版本配置列")
+                    .font(.headline)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("新版本列名称")
+                        .font(.caption)
+                    TextField("新列名", text: $renamedName)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                HStack {
+                    Button("取消") { isShowingRenameSheet = false }
+                    Spacer()
+                    Button("保存") {
+                        model.renameConfigTableColumn(from: renamingTarget, to: renamedName)
+                        isShowingRenameSheet = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(renamedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(18)
+            .frame(width: 340)
+        }
     }
 }
 
@@ -805,6 +1027,227 @@ private struct ComponentConfigCard: View {
         }
 
         return (true, "提示：目录存在，但未在该层级检测到 .podspec，请确认是否为组件根目录", "exclamationmark.triangle.fill", .orange)
+    }
+}
+
+// MARK: - 多版本列横向对照矩阵视图 (MultiColumnMatrixView)
+
+private struct MatrixColumnHeader: View {
+    let col: ComponentConfigColumn
+    let isActive: Bool
+    let onSetActive: () -> Void
+
+    var body: some View {
+        VStack(alignment: .center, spacing: 4) {
+            HStack(spacing: 4) {
+                if isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                Text(col.name)
+                    .font(.system(size: 13, weight: .bold))
+            }
+            if let desc = col.description, !desc.isEmpty {
+                Text(desc)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if !isActive {
+                Button("设为生效列", action: onSetActive)
+                    .controlSize(.mini)
+                    .buttonStyle(.bordered)
+            } else {
+                Text("当前生效")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.green.opacity(0.12))
+                    .clipShape(Capsule())
+            }
+        }
+        .frame(width: 200, alignment: .center)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+    }
+}
+
+private struct MatrixColumnCell: View {
+    let entry: ComponentConfigEntry?
+    let isCurrentColumn: Bool
+    let isDiff: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let entry {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 4) {
+                        Text(entry.version ?? "latest")
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        if isDiff && !isCurrentColumn {
+                            Image(systemName: "arrow.left.arrow.right")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.orange)
+                                .help("与当前生效列的配置不同")
+                        }
+                    }
+                    HStack(spacing: 4) {
+                        Text(entry.mode)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(modeColor(entry.mode))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(modeColor(entry.mode).opacity(0.12))
+                            .clipShape(Capsule())
+
+                        if !entry.enabled {
+                            Text("未启用")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } else {
+                Text("-")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 200, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(isDiff && !isCurrentColumn ? Color.orange.opacity(0.05) : Color.clear)
+    }
+
+    private func modeColor(_ mode: String) -> Color {
+        switch mode {
+        case "local": return .blue
+        case "source": return .orange
+        case "binary": return .green
+        case "branch": return .purple
+        default: return .secondary
+        }
+    }
+}
+
+private struct MultiColumnMatrixView: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Group {
+            if let table = model.configTable, let columns = table.columns, !columns.isEmpty {
+                let allComponentNames = collectAllComponentNames(from: columns)
+                let filteredNames = filterComponents(allComponentNames)
+
+                VStack(spacing: 0) {
+                    // 矩阵头部说明
+                    HStack {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                        Text("多列版本对照视图：横向直观对比不同 App 版本列的组件依赖版本与调试模式。点击列头的「设为生效列」可将该版本设为活跃依赖基线。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+
+                    Divider()
+
+                    // 对照表格
+                    ScrollView([.horizontal, .vertical]) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            // 表头
+                            HStack(spacing: 0) {
+                                Text("组件名称")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .frame(width: 220, alignment: .leading)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 10)
+
+                                Divider()
+
+                                ForEach(columns, id: \ComponentConfigColumn.name) { col in
+                                    MatrixColumnHeader(
+                                        col: col,
+                                        isActive: col.name == table.currentColumnName,
+                                        onSetActive: {
+                                            model.switchConfigTableColumn(to: col.name)
+                                        }
+                                    )
+                                    Divider()
+                                }
+                            }
+                            .background(Color(nsColor: .controlBackgroundColor))
+
+                            Divider()
+
+                            // 数据行
+                            ForEach(filteredNames, id: \.self) { compName in
+                                HStack(spacing: 0) {
+                                    // 组件名列
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "cube.box")
+                                            .foregroundStyle(.tint)
+                                        Text(compName)
+                                            .font(.system(size: 13, weight: .semibold))
+                                    }
+                                    .frame(width: 220, alignment: .leading)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 10)
+
+                                    Divider()
+
+                                    // 各版本列数据
+                                    ForEach(columns, id: \ComponentConfigColumn.name) { col in
+                                        let entry = col.components.first(where: { $0.name == compName })
+                                        let activeEntry = table.components.first(where: { $0.name == compName })
+                                        let isDiff = (entry?.version != activeEntry?.version) || (entry?.mode != activeEntry?.mode)
+
+                                        MatrixColumnCell(
+                                            entry: entry,
+                                            isCurrentColumn: col.name == table.currentColumnName,
+                                            isDiff: isDiff
+                                        )
+
+                                        Divider()
+                                    }
+                                }
+                                .background(Color(nsColor: .windowBackgroundColor))
+
+                                Divider()
+                            }
+                        }
+                    }
+                }
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "doc.badge.plus")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.secondary)
+                    Text("当前没有可对比的版本列配置")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private func collectAllComponentNames(from columns: [ComponentConfigColumn]) -> [String] {
+        var names = Set<String>()
+        for col in columns {
+            for comp in col.components {
+                names.insert(comp.name)
+            }
+        }
+        return names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    private func filterComponents(_ names: [String]) -> [String] {
+        let query = model.appSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return names }
+        return names.filter { $0.lowercased().contains(query) }
     }
 }
 

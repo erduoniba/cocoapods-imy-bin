@@ -126,6 +126,33 @@ public struct ComponentConfigEntry: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// 配置表中的单个 App 版本列（每列对应一个 App 版本或环境分支的组件依赖基线）
+public struct ComponentConfigColumn: Codable, Identifiable, Equatable, Sendable {
+    public var id: String { name }
+    /// 版本列名称（如 "1.0.0", "1.1.0", "1.2.0", "main"）
+    public var name: String
+    /// 版本列说明（如 "App 1.2.0 迭代发版基线"）
+    public var description: String?
+    public var createdAt: String?
+    public var updatedAt: String?
+    /// 该版本列专属的组件依赖清单
+    public var components: [ComponentConfigEntry]
+
+    public init(
+        name: String,
+        description: String? = nil,
+        createdAt: String? = ISO8601DateFormatter().string(from: Date()),
+        updatedAt: String? = ISO8601DateFormatter().string(from: Date()),
+        components: [ComponentConfigEntry] = []
+    ) {
+        self.name = name
+        self.description = description
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.components = components
+    }
+}
+
 public struct ComponentConfigTable: Codable, Equatable, Sendable {
     public static let filename = ".imy-bin-config.json"
 
@@ -134,7 +161,16 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
     public var environment: String
     public var defaultMode: String
     public var updatedAt: String
+    /// 当前生效的 App 版本列名称
+    public var activeColumn: String?
+    /// 多版本列配置清单
+    public var columns: [ComponentConfigColumn]?
+    /// 当前生效列的组件项（同时保留顶层，确保向下兼容与 CLI 零冲突）
     public var components: [ComponentConfigEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case version, project, environment, defaultMode, updatedAt, activeColumn, columns, components
+    }
 
     public init(
         version: Int = 1,
@@ -142,6 +178,8 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
         environment: String = "dev",
         defaultMode: String = "binary",
         updatedAt: String = ISO8601DateFormatter().string(from: Date()),
+        activeColumn: String? = nil,
+        columns: [ComponentConfigColumn]? = nil,
         components: [ComponentConfigEntry]
     ) {
         self.version = version
@@ -150,6 +188,165 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
         self.defaultMode = defaultMode
         self.updatedAt = updatedAt
         self.components = components
+
+        if let columns = columns, !columns.isEmpty {
+            self.columns = columns
+            self.activeColumn = activeColumn ?? columns.first?.name ?? "1.0.0"
+        } else {
+            let colName = activeColumn ?? "1.0.0"
+            self.columns = [
+                ComponentConfigColumn(
+                    name: colName,
+                    description: "默认 App 版本列",
+                    components: components
+                )
+            ]
+            self.activeColumn = colName
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        project = try container.decodeIfPresent(String.self, forKey: .project) ?? ""
+        environment = try container.decodeIfPresent(String.self, forKey: .environment) ?? "dev"
+        defaultMode = try container.decodeIfPresent(String.self, forKey: .defaultMode) ?? "binary"
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
+        let decodedComponents = try container.decodeIfPresent([ComponentConfigEntry].self, forKey: .components) ?? []
+        let decodedColumns = try container.decodeIfPresent([ComponentConfigColumn].self, forKey: .columns)
+        let decodedActive = try container.decodeIfPresent(String.self, forKey: .activeColumn)
+
+        if let decodedColumns, !decodedColumns.isEmpty {
+            columns = decodedColumns
+            let targetActive = decodedActive ?? decodedColumns.first?.name ?? "1.0.0"
+            activeColumn = targetActive
+            if let activeCol = decodedColumns.first(where: { $0.name == targetActive }) {
+                components = activeCol.components
+            } else {
+                components = decodedComponents.isEmpty ? (decodedColumns.first?.components ?? []) : decodedComponents
+            }
+        } else {
+            let defaultColName = decodedActive ?? "1.0.0"
+            columns = [
+                ComponentConfigColumn(
+                    name: defaultColName,
+                    description: "默认 App 版本列",
+                    components: decodedComponents
+                )
+            ]
+            activeColumn = defaultColName
+            components = decodedComponents
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(project, forKey: .project)
+        try container.encode(environment, forKey: .environment)
+        try container.encode(defaultMode, forKey: .defaultMode)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(activeColumn, forKey: .activeColumn)
+        try container.encodeIfPresent(columns, forKey: .columns)
+        try container.encode(components, forKey: .components)
+    }
+
+    /// 获取当前生效列名称
+    public var currentColumnName: String {
+        activeColumn ?? columns?.first?.name ?? "1.0.0"
+    }
+
+    /// 保证 columns 存在且包含当前列
+    public mutating func ensureColumnsInitialized() {
+        if columns == nil || columns?.isEmpty == true {
+            let colName = currentColumnName
+            columns = [ComponentConfigColumn(name: colName, description: "默认 App 版本列", components: components)]
+            activeColumn = colName
+        }
+    }
+
+    /// 将当前工作区 components 修改同步回当前活跃列
+    public mutating func syncComponentsToActiveColumn() {
+        ensureColumnsInitialized()
+        if let idx = columns?.firstIndex(where: { $0.name == currentColumnName }) {
+            columns?[idx].components = components
+            columns?[idx].updatedAt = ISO8601DateFormatter().string(from: Date())
+        }
+    }
+
+    /// 切换当前生效版本列
+    @discardableResult
+    public mutating func switchActiveColumn(to targetName: String) -> Bool {
+        ensureColumnsInitialized()
+        guard let cols = columns, let targetIndex = cols.firstIndex(where: { $0.name == targetName }) else {
+            return false
+        }
+        syncComponentsToActiveColumn()
+        activeColumn = targetName
+        components = cols[targetIndex].components
+        return true
+    }
+
+    /// 新建 App 版本列
+    @discardableResult
+    public mutating func createColumn(name: String, description: String? = nil, copyFromCurrent: Bool = true) -> Bool {
+        ensureColumnsInitialized()
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if columns?.contains(where: { $0.name == trimmed }) == true {
+            return false
+        }
+        syncComponentsToActiveColumn()
+        let now = ISO8601DateFormatter().string(from: Date())
+        let newEntries = copyFromCurrent ? components : []
+        let newCol = ComponentConfigColumn(
+            name: trimmed,
+            description: description,
+            createdAt: now,
+            updatedAt: now,
+            components: newEntries
+        )
+        columns?.append(newCol)
+        return true
+    }
+
+    /// 删除指定版本列（至少保留一列）
+    @discardableResult
+    public mutating func deleteColumn(name: String) -> Bool {
+        ensureColumnsInitialized()
+        guard let count = columns?.count, count > 1 else {
+            return false
+        }
+        guard let idx = columns?.firstIndex(where: { $0.name == name }) else {
+            return false
+        }
+        columns?.remove(at: idx)
+        if activeColumn == name {
+            if let first = columns?.first {
+                activeColumn = first.name
+                components = first.components
+            }
+        }
+        return true
+    }
+
+    /// 重命名指定版本列
+    @discardableResult
+    public mutating func renameColumn(from oldName: String, to newName: String) -> Bool {
+        ensureColumnsInitialized()
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != oldName else { return false }
+        if columns?.contains(where: { $0.name == trimmed }) == true {
+            return false
+        }
+        guard let idx = columns?.firstIndex(where: { $0.name == oldName }) else {
+            return false
+        }
+        columns?[idx].name = trimmed
+        if activeColumn == oldName {
+            activeColumn = trimmed
+        }
+        return true
     }
 
     public static func fileURL(in appDirectoryURL: URL) -> URL {
@@ -271,6 +468,7 @@ public struct ComponentConfigTable: Codable, Equatable, Sendable {
         }
         copy.updatedAt = ISO8601DateFormatter().string(from: Date())
         copy.components.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        copy.syncComponentsToActiveColumn()
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

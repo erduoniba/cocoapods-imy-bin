@@ -103,6 +103,7 @@ final class AppModel: ObservableObject {
 
     // Host App's dependency config table (.imy-bin-config.json)
     @Published var configTable: ComponentConfigTable?
+    @Published var showMultiColumnMatrix: Bool = false
     @Published private(set) var hasSavedConfigTable = false
     @Published private(set) var localComponents: [LocalComponentDependency] = []
     @Published private(set) var managedPolicy: ManagedPolicySnapshot?
@@ -630,6 +631,79 @@ final class AppModel: ObservableObject {
     func syncConfigVersionFromLocalPodspec(_ componentName: String) {
         guard let local = localPodspecInfo(named: componentName) else { return }
         updateConfigEntryVersion(componentName, to: local.version)
+    }
+
+    // MARK: - App Version Columns (配置表列管理)
+
+    func switchConfigTableColumn(to columnName: String) {
+        guard var table = configTable else { return }
+        if table.switchActiveColumn(to: columnName) {
+            configTable = table
+            _ = saveConfigTable()
+        }
+    }
+
+    func createConfigTableColumn(name: String, description: String? = nil, copyFromCurrent: Bool = true) {
+        guard var table = configTable else { return }
+        if table.createColumn(name: name, description: description, copyFromCurrent: copyFromCurrent) {
+            _ = table.switchActiveColumn(to: name)
+            configTable = table
+            _ = saveConfigTable()
+        } else {
+            alertMessage = "创建版本列失败：列名不能为空或已存在同名列"
+        }
+    }
+
+    func deleteConfigTableColumn(name: String) {
+        guard var table = configTable else { return }
+        if table.deleteColumn(name: name) {
+            configTable = table
+            _ = saveConfigTable()
+        } else {
+            alertMessage = "删除版本列失败：配置表中至少需保留一个版本列"
+        }
+    }
+
+    func renameConfigTableColumn(from oldName: String, to newName: String) {
+        guard var table = configTable else { return }
+        if table.renameColumn(from: oldName, to: newName) {
+            configTable = table
+            _ = saveConfigTable()
+        } else {
+            alertMessage = "重命名版本列失败：新列名无效或已存在同名列"
+        }
+    }
+
+    func updateColumnEntryVersion(columnName: String, componentName: String, to version: String) {
+        guard var table = configTable else { return }
+        table.ensureColumnsInitialized()
+        if let colIdx = table.columns?.firstIndex(where: { $0.name == columnName }),
+           let compIdx = table.columns?[colIdx].components.firstIndex(where: { $0.name == componentName }) {
+            table.columns?[colIdx].components[compIdx].version = version.trimmingCharacters(in: .whitespacesAndNewlines)
+            if table.currentColumnName == columnName {
+                if let idx = table.components.firstIndex(where: { $0.name == componentName }) {
+                    table.components[idx].version = version.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+            configTable = table
+            _ = saveConfigTable()
+        }
+    }
+
+    func updateColumnEntryMode(columnName: String, componentName: String, to mode: String) {
+        guard var table = configTable else { return }
+        table.ensureColumnsInitialized()
+        if let colIdx = table.columns?.firstIndex(where: { $0.name == columnName }),
+           let compIdx = table.columns?[colIdx].components.firstIndex(where: { $0.name == componentName }) {
+            table.columns?[colIdx].components[compIdx].mode = mode
+            if table.currentColumnName == columnName {
+                if let idx = table.components.firstIndex(where: { $0.name == componentName }) {
+                    table.components[idx].mode = mode
+                }
+            }
+            configTable = table
+            _ = saveConfigTable()
+        }
     }
 
     func focusComponent(_ componentName: String, tab: ComponentPage = .publish) {
