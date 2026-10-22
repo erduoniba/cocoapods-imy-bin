@@ -34,14 +34,14 @@ swift build
 swift test
 ```
 
-## 打包本地 App
+## 打包与分发 App
 
 ```bash
-./Scripts/package_app.sh
-open .build/IMYBinManager.app
+./Scripts/package-app.sh
+open dist/IMYBinManager.app
 ```
 
-生成的 `.app` 使用 ad-hoc 签名，仅用于本地开发。正式分发需配置独立 Bundle ID、Developer ID、Hardened Runtime 和 notarization。
+默认会生成带有 ad-hoc 本地签名的 `.app`，以及用于分发的 `.zip` 和 `.dmg` 镜像（位于 `dist/` 目录下）。详细参数与发布指南详见 [Scripts/README.md](Scripts/README.md)。正式对外分发需配置独立 Bundle ID、Developer ID、Hardened Runtime 和 notarization。
 
 工程依赖页现可读取本地 `.imy-bin-policy.json`，并通过 `pod bin sync`、`pod bin switch` 启动实验性策略同步和个人模式切换；详见 [团队平台第一阶段实现](../../docs/platform-foundation.md)。这不是生产发布界面。
 

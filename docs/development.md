@@ -56,7 +56,7 @@ macOS 客户端使用 Swift Package Manager 和 Swift Testing：
 cd apps/IMYBinManager
 swift build
 swift test
-./Scripts/package_app.sh
+./Scripts/package-app.sh
 ```
 
 `binary-server/` 当前没有有效的测试脚本；`npm test` 不能作为验收。修改服务端前应先为路由补集成测试，并使用临时 MongoDB 与临时制品目录，避免测试污染真实数据。

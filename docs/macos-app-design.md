@@ -48,7 +48,7 @@ flowchart LR
 - `BinaryServerClient`：规范化服务 URL、解析 `{组件名: [版本]}` 协议和处理 HTTP 错误；
 - `IMYBinManager`：SwiftUI 页面与状态管理；
 - `IMYBinCoreTests`：不依赖真实私有源的单元测试；
-- `Scripts/package_app.sh`：将 release 可执行文件封装为本地 `.app`。
+- `Scripts/package-app.sh`：将 release 可执行文件封装为 macOS `.app` 并生成分发镜像。
 
 ## 安全边界
 

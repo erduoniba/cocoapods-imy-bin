@@ -865,7 +865,8 @@ private struct ConsoleDrawer: View {
     let scope: TaskScope
     @Binding var isExpanded: Bool
 
-    @AppStorage("IMYBinConsoleDrawerHeight") private var consoleHeight: Double = 280
+    // 局部状态：仅控制当前窗口控制台高度，不影响其他窗口
+    @State private var consoleHeight: Double = 280
     @State private var dragStartHeight: Double = 280
     @State private var isDragging: Bool = false
 
@@ -1257,32 +1258,69 @@ private struct ComponentTopBar: View {
                     Text("被 \(report.dependentApps.map(\.name).joined(separator: ", ")) 引用")
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
 
-                // 快捷打开工具
-                HStack(spacing: 6) {
-                    Button {
-                        if let dir = info.exampleDirectoryURL ?? info.repositoryURL as URL? {
-                            _ = WorkspaceOpener.openInXcode(at: dir)
+                // 快捷打开工具（支持自适应：空间不足时隐藏文字只保留图标）
+                ViewThatFits(in: .horizontal) {
+                    // 1. 宽屏模式：图标 + 文字
+                    HStack(spacing: 6) {
+                        Button {
+                            if let dir = info.exampleDirectoryURL ?? info.repositoryURL as URL? {
+                                _ = WorkspaceOpener.openInXcode(at: dir)
+                            }
+                        } label: {
+                            Label("Xcode", systemImage: "hammer.fill")
                         }
-                    } label: {
-                        Label("Xcode", systemImage: "hammer.fill")
-                    }
-                    .controlSize(.regular)
+                        .controlSize(.regular)
+                        .help("在 Xcode 中打开工程")
 
-                    Button {
-                        NSWorkspace.shared.selectFile(info.podspecURL.path, inFileViewerRootedAtPath: "")
-                    } label: {
-                        Label("Finder", systemImage: "folder")
-                    }
-                    .controlSize(.regular)
+                        Button {
+                            NSWorkspace.shared.selectFile(info.podspecURL.path, inFileViewerRootedAtPath: "")
+                        } label: {
+                            Label("Finder", systemImage: "folder")
+                        }
+                        .controlSize(.regular)
+                        .help("在 Finder 中显示规格文件")
 
-                    Button {
-                        WorkspaceOpener.openInTerminal(at: info.repositoryURL)
-                    } label: {
-                        Label("终端", systemImage: "terminal")
+                        Button {
+                            WorkspaceOpener.openInTerminal(at: info.repositoryURL)
+                        } label: {
+                            Label("终端", systemImage: "terminal")
+                        }
+                        .controlSize(.regular)
+                        .help("在终端中打开组件目录")
                     }
-                    .controlSize(.regular)
+
+                    // 2. 紧凑模式：空间受限时隐藏文字，只保留图标
+                    HStack(spacing: 6) {
+                        Button {
+                            if let dir = info.exampleDirectoryURL ?? info.repositoryURL as URL? {
+                                _ = WorkspaceOpener.openInXcode(at: dir)
+                            }
+                        } label: {
+                            Image(systemName: "hammer.fill")
+                        }
+                        .controlSize(.regular)
+                        .help("Xcode：在 Xcode 中打开工程")
+
+                        Button {
+                            NSWorkspace.shared.selectFile(info.podspecURL.path, inFileViewerRootedAtPath: "")
+                        } label: {
+                            Image(systemName: "folder")
+                        }
+                        .controlSize(.regular)
+                        .help("Finder：在 Finder 中显示规格文件")
+
+                        Button {
+                            WorkspaceOpener.openInTerminal(at: info.repositoryURL)
+                        } label: {
+                            Image(systemName: "terminal")
+                        }
+                        .controlSize(.regular)
+                        .help("终端：在终端中打开组件目录")
+                    }
                 }
 
                 // 安装依赖快捷按钮组（组件工作台唯一依赖安装入口）
@@ -1319,14 +1357,25 @@ private struct ComponentTopBar: View {
 
             Spacer()
 
-            // 返回 App 依赖窗口
-            Button {
-                WindowManager.activateOrCreateAppManagerWindow(openWindow: openWindow)
-            } label: {
-                Label("App 依赖窗口 (⇧⌘1)", systemImage: "app.badge")
+            // 返回 App 依赖窗口 (自适应：空间不足时隐藏文字只保留图标)
+            ViewThatFits(in: .horizontal) {
+                Button {
+                    WindowManager.activateOrCreateAppManagerWindow(openWindow: openWindow)
+                } label: {
+                    Label("App 依赖窗口 (⇧⌘1)", systemImage: "app.badge")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+
+                Button {
+                    WindowManager.activateOrCreateAppManagerWindow(openWindow: openWindow)
+                } label: {
+                    Image(systemName: "app.badge")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .help("App 依赖窗口 (⇧⌘1)")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
