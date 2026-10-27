@@ -43,6 +43,10 @@ struct ContentView: View {
             ToolboxSheetView()
                 .frame(minWidth: 720, minHeight: 540)
         }
+        .sheet(isPresented: $model.isConfigTableAdminPresented) {
+            ConfigTableAdminSheetView()
+                .frame(minWidth: 1020, minHeight: 660)
+        }
         .alert(
             model.appAlert?.title ?? "提示",
             isPresented: Binding(
@@ -186,6 +190,13 @@ private struct AppTopBar: View {
                 }
                 .disabled(model.hostAppDirectories.isEmpty || model.isRunning)
                 .help("执行 pod bin update")
+
+                Button {
+                    model.openConfigTableAdmin()
+                } label: {
+                    Label("配置表管理后台", systemImage: "tablecells.badge.ellipsis")
+                }
+                .help("打开配置表管理后台（查看、修改、创建、复制配置表及版本列）")
 
                 Button {
                     model.isToolboxSheetPresented = true
@@ -339,6 +350,15 @@ private struct AppConfigColumnBar: View {
             }
 
             Spacer()
+
+            Button {
+                model.openConfigTableAdmin()
+            } label: {
+                Label("管理后台", systemImage: "tablecells.badge.ellipsis")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("打开配置表管理后台：集中查看、修改、创建、复制配置表与版本列")
 
             // 切换单列明细 / 多列版本对照矩阵
             if model.showMultiColumnMatrix {
@@ -2741,5 +2761,782 @@ private struct ScaffoldTab: View {
             }
             Spacer()
         }
+    }
+}
+
+// MARK: - 配置表管理后台弹窗 (ConfigTableAdminSheetView)
+
+private struct ConfigTableAdminSheetView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var isShowingNewTableSheet = false
+    @State private var newProjectName = ""
+    @State private var newInitialColumn = "1.0.0"
+    @State private var newDefaultMode = "binary"
+    @State private var newEnvironment = "dev"
+    @State private var newCopyFromProject = ""
+
+    @State private var isShowingDuplicateTableSheet = false
+    @State private var duplicateTargetProject = ""
+
+    @State private var isShowingNewColumnSheet = false
+    @State private var newColName = ""
+    @State private var newColDesc = ""
+    @State private var newColCopyFrom = ""
+    @State private var newColSetActive = true
+
+    @State private var isShowingAddCompSheet = false
+    @State private var addCompName = ""
+    @State private var addCompVersion = "0.1.0"
+    @State private var addCompMode = "binary"
+    @State private var addCompPath = ""
+    @State private var addCompBranch = ""
+
+    @State private var searchText = ""
+
+    private var selectedTableIndex: Int? {
+        model.adminConfigTables.firstIndex(where: { $0.project == model.selectedAdminTableProject })
+            ?? (model.adminConfigTables.isEmpty ? nil : 0)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 1. 顶部标题与全局操作栏
+            HStack(spacing: 12) {
+                Label("配置表管理后台 (Config Table Admin Center)", systemImage: "tablecells.badge.ellipsis")
+                    .font(.system(size: 16, weight: .bold))
+
+                if let msg = model.adminStatusMessage {
+                    Text(msg)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.accentColor.opacity(0.1))
+                        .clipShape(Capsule())
+                }
+
+                Spacer()
+
+                Button {
+                    model.refreshAdminConfigTables()
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.small)
+
+                Button {
+                    model.openWebAdminDashboard()
+                } label: {
+                    Label("打开 Web 管理后台", systemImage: "safari")
+                }
+                .controlSize(.small)
+                .help("在浏览器中打开 Web 版配置表管理后台 (http://127.0.0.1:8080/dashboard)")
+
+                Button("关闭") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.bar)
+
+            Divider()
+
+            // 2. 主体左右分栏：左侧配置表列表（查看/新建/复制/删除），右侧配置表详情（版本列与组件修改）
+            HSplitView {
+                // 左侧：配置表清单
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Text("工程配置表清单 (\(model.adminConfigTables.count))")
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer()
+                        Button {
+                            newProjectName = ""
+                            newInitialColumn = "1.0.0"
+                            newDefaultMode = "binary"
+                            newEnvironment = "dev"
+                            newCopyFromProject = ""
+                            isShowingNewTableSheet = true
+                        } label: {
+                            Label("新建", systemImage: "plus")
+                        }
+                        .controlSize(.small)
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(12)
+
+                    Divider()
+
+                    if model.adminConfigTables.isEmpty {
+                        VStack(spacing: 10) {
+                            Spacer()
+                            Text("暂无配置表")
+                                .foregroundStyle(.secondary)
+                            Button("＋ 新建配置表") {
+                                isShowingNewTableSheet = true
+                            }
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        List(selection: Binding(
+                            get: { model.selectedAdminTableProject },
+                            set: { newVal in
+                                if !newVal.isEmpty {
+                                    model.selectAdminProject(newVal)
+                                }
+                            }
+                        )) {
+                            ForEach(model.adminConfigTables, id: \.project) { table in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(table.project)
+                                            .font(.system(size: 14, weight: .semibold))
+                                        Spacer()
+                                        Text(table.environment)
+                                            .font(.caption2)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.secondary.opacity(0.15))
+                                            .clipShape(Capsule())
+                                    }
+                                    HStack(spacing: 8) {
+                                        Text("生效列: \(table.currentColumnName)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text("· \((table.columns ?? []).count) 个版本列")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text("· \(table.components.count) 个组件")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                                .tag(table.project)
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    // 左侧底部快捷按钮：复制配置表 / 删除配置表
+                    HStack(spacing: 8) {
+                        Button {
+                            if let cur = model.currentAdminTable {
+                                duplicateTargetProject = "\(cur.project)-Copy"
+                                isShowingDuplicateTableSheet = true
+                            }
+                        } label: {
+                            Label("复制配置表", systemImage: "doc.on.doc")
+                        }
+                        .controlSize(.small)
+                        .disabled(model.currentAdminTable == nil)
+
+                        Spacer()
+
+                        Button(role: .destructive) {
+                            if let cur = model.currentAdminTable {
+                                model.adminDeleteConfigTable(project: cur.project)
+                            }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .controlSize(.small)
+                        .disabled(model.adminConfigTables.count <= 1)
+                        .help("删除当前选中的配置表")
+                    }
+                    .padding(10)
+                }
+                .frame(minWidth: 250, idealWidth: 270, maxWidth: 320)
+
+                // 右侧：当前选中配置表的详细查看与在线修改
+                if let tIdx = selectedTableIndex {
+                    adminTableDetailView(tableIndex: tIdx)
+                } else {
+                    VStack {
+                        Spacer()
+                        Text("请在左侧选择或新建一个配置表")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        }
+        // 弹窗 1：新建配置表
+        .sheet(isPresented: $isShowingNewTableSheet) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("新建工程配置表")
+                    .font(.headline)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("工程标识名称 (Project Key)*").font(.caption)
+                    TextField("例如: HDImyBinApp 或 MyApp", text: $newProjectName)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("初始 App 版本列名称*").font(.caption)
+                    TextField("例如: 1.0.0", text: $newInitialColumn)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                HStack(spacing: 12) {
+                    Picker("默认模式:", selection: $newDefaultMode) {
+                        Text("二进制 (binary)").tag("binary")
+                        Text("源码 (source)").tag("source")
+                        Text("本地 (local)").tag("local")
+                        Text("分支 (branch)").tag("branch")
+                    }
+                    Picker("环境:", selection: $newEnvironment) {
+                        Text("dev").tag("dev")
+                        Text("debug_iphoneos").tag("debug_iphoneos")
+                        Text("release_iphoneos").tag("release_iphoneos")
+                    }
+                }
+
+                Picker("复制现有配置表基线 (可选):", selection: $newCopyFromProject) {
+                    Text("不复制（使用默认组件初始化）").tag("")
+                    ForEach(model.adminConfigTables, id: \.project) { item in
+                        Text("复制自 \(item.project)").tag(item.project)
+                    }
+                }
+
+                HStack {
+                    Button("取消") { isShowingNewTableSheet = false }
+                    Spacer()
+                    Button("立即创建") {
+                        model.adminCreateConfigTable(
+                            project: newProjectName,
+                            initialColumn: newInitialColumn,
+                            defaultMode: newDefaultMode,
+                            environment: newEnvironment,
+                            copyFromProject: newCopyFromProject.isEmpty ? nil : newCopyFromProject
+                        )
+                        isShowingNewTableSheet = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newProjectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(20)
+            .frame(width: 420)
+        }
+        // 弹窗 2：复制配置表
+        .sheet(isPresented: $isShowingDuplicateTableSheet) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("复制配置表（克隆整表及所有版本列）")
+                    .font(.headline)
+
+                Text("源配置表：\(model.currentAdminTable?.project ?? "-")")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("新配置表工程名称*").font(.caption)
+                    TextField("例如: HDImyBinApp-Release", text: $duplicateTargetProject)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                HStack {
+                    Button("取消") { isShowingDuplicateTableSheet = false }
+                    Spacer()
+                    Button("开始复制") {
+                        if let src = model.currentAdminTable?.project {
+                            model.adminDuplicateConfigTable(sourceProject: src, targetProject: duplicateTargetProject)
+                        }
+                        isShowingDuplicateTableSheet = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(duplicateTargetProject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(20)
+            .frame(width: 380)
+        }
+        // 弹窗 3：新建/复制版本列
+        .sheet(isPresented: $isShowingNewColumnSheet) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(newColCopyFrom.isEmpty ? "新增 App 版本列" : "复制 App 版本列")
+                    .font(.headline)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("新版本列名称 (如 1.3.0, release/2.0)*").font(.caption)
+                    TextField("例如: 1.3.0", text: $newColName)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("版本描述说明").font(.caption)
+                    TextField("例如: App 1.3.0 迭代发版基线", text: $newColDesc)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                if let cols = model.currentAdminTable?.columns {
+                    Picker("复制组件依赖自:", selection: $newColCopyFrom) {
+                        Text("空白版本列（不复制组件）").tag("")
+                        ForEach(cols, id: \.name) { c in
+                            Text("\(c.name) (\(c.components.count) 个组件)").tag(c.name)
+                        }
+                    }
+                }
+
+                Toggle("创建后设为当前生效版本列", isOn: $newColSetActive)
+                    .toggleStyle(.checkbox)
+
+                HStack {
+                    Button("取消") { isShowingNewColumnSheet = false }
+                    Spacer()
+                    Button("确定保存") {
+                        addOrDuplicateColumnInCurrentAdminTable()
+                        isShowingNewColumnSheet = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newColName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(20)
+            .frame(width: 400)
+        }
+        // 弹窗 4：向当前版本列添加组件
+        .sheet(isPresented: $isShowingAddCompSheet) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("添加组件依赖至版本列「\(model.selectedAdminColumnName)」")
+                    .font(.headline)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("组件 Pod 名称*").font(.caption)
+                    TextField("例如: HDDynamicPod", text: $addCompName)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Picker("依赖解析模式:", selection: $addCompMode) {
+                    Text("二进制 (binary)").tag("binary")
+                    Text("源码 (source)").tag("source")
+                    Text("本地 (local)").tag("local")
+                    Text("分支 (branch)").tag("branch")
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("版本号 (Version)").font(.caption)
+                    TextField("例如: 0.1.6", text: $addCompVersion)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                if addCompMode == "local" {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("本地相对路径 (Path)").font(.caption)
+                        TextField("例如: ../HDDynamicPod", text: $addCompPath)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                } else if addCompMode == "branch" {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Git 分支名称 (Branch)").font(.caption)
+                        TextField("例如: main 或 feature/login", text: $addCompBranch)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
+                HStack {
+                    Button("取消") { isShowingAddCompSheet = false }
+                    Spacer()
+                    Button("添加组件") {
+                        appendComponentToCurrentAdminColumn()
+                        isShowingAddCompSheet = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(addCompName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(20)
+            .frame(width: 380)
+        }
+    }
+
+    @ViewBuilder
+    private func adminTableDetailView(tableIndex: Int) -> some View {
+        let table = model.adminConfigTables[tableIndex]
+        let columns = table.columns ?? []
+        let viewingColIndex = columns.firstIndex(where: { $0.name == model.selectedAdminColumnName })
+            ?? (columns.isEmpty ? nil : 0)
+
+        VStack(alignment: .leading, spacing: 0) {
+            // A. 配置表元信息与保存操作栏
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(table.project)
+                        .font(.system(size: 16, weight: .bold))
+                    Text("最后更新: \(table.updatedAt)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Divider().frame(height: 26)
+
+                Picker("环境:", selection: Binding(
+                    get: { model.adminConfigTables[tableIndex].environment },
+                    set: { model.adminConfigTables[tableIndex].environment = $0 }
+                )) {
+                    Text("dev").tag("dev")
+                    Text("debug_iphoneos").tag("debug_iphoneos")
+                    Text("release_iphoneos").tag("release_iphoneos")
+                }
+                .frame(width: 170)
+
+                Picker("默认模式:", selection: Binding(
+                    get: { model.adminConfigTables[tableIndex].defaultMode },
+                    set: { model.adminConfigTables[tableIndex].defaultMode = $0 }
+                )) {
+                    Text("二进制 (binary)").tag("binary")
+                    Text("源码 (source)").tag("source")
+                    Text("本地 (local)").tag("local")
+                    Text("分支 (branch)").tag("branch")
+                }
+                .frame(width: 170)
+
+                Spacer()
+
+                Button {
+                    model.adminApplyTableToLocalWorkspace(model.adminConfigTables[tableIndex])
+                } label: {
+                    Label("应用到当前工程", systemImage: "square.and.arrow.down")
+                }
+                .help("将此配置表写入当前打开的本地宿主工程 .imy-bin-config.json")
+
+                Button {
+                    model.adminSaveTable(model.adminConfigTables[tableIndex])
+                } label: {
+                    Label("保存修改", systemImage: "checkmark.circle.fill")
+                        .fontWeight(.semibold)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(12)
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            Divider()
+
+            // B. App 版本列导航与管理栏
+            HStack(spacing: 8) {
+                Text("App 版本列:")
+                    .font(.system(size: 13, weight: .semibold))
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(columns, id: \.name) { col in
+                            let isViewing = col.name == (viewingColIndex != nil ? columns[viewingColIndex!].name : "")
+                            let isActive = col.name == table.currentColumnName
+                            if isViewing {
+                                Button {
+                                    model.selectedAdminColumnName = col.name
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        if isActive {
+                                            Image(systemName: "star.fill")
+                                                .foregroundStyle(.yellow)
+                                        }
+                                        Text(col.name).fontWeight(.bold)
+                                        if isActive {
+                                            Text("(生效中)").font(.caption2)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            } else {
+                                Button {
+                                    model.selectedAdminColumnName = col.name
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        if isActive {
+                                            Image(systemName: "star.fill")
+                                                .foregroundStyle(.yellow)
+                                        }
+                                        Text(col.name)
+                                        if isActive {
+                                            Text("(生效中)").font(.caption2).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+                }
+
+                Spacer()
+
+                if let vIdx = viewingColIndex {
+                    let vCol = columns[vIdx]
+                    Button("★ 设为生效列") {
+                        model.adminConfigTables[tableIndex].activeColumn = vCol.name
+                        model.adminConfigTables[tableIndex].components = vCol.components
+                        model.adminSaveTable(model.adminConfigTables[tableIndex])
+                    }
+                    .controlSize(.small)
+                    .disabled(vCol.name == table.currentColumnName)
+
+                    Button("⎘ 复制此版本列") {
+                        newColName = "\(vCol.name)-copy"
+                        newColDesc = "由 \(vCol.name) 复制创建的 App 版本基线"
+                        newColCopyFrom = vCol.name
+                        newColSetActive = true
+                        isShowingNewColumnSheet = true
+                    }
+                    .controlSize(.small)
+
+                    Button("＋ 新增版本列") {
+                        newColName = ""
+                        newColDesc = ""
+                        newColCopyFrom = vCol.name
+                        newColSetActive = true
+                        isShowingNewColumnSheet = true
+                    }
+                    .controlSize(.small)
+
+                    if columns.count > 1 {
+                        Button(role: .destructive) {
+                            deleteColumnInCurrentAdminTable(columnName: vCol.name, tableIndex: tableIndex)
+                        } label: {
+                            Text("✕ 删除列")
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            // C. 组件依赖筛选与新增栏
+            if let vIdx = viewingColIndex {
+                let vCol = columns[vIdx]
+                HStack(spacing: 12) {
+                    Text("版本列「\(vCol.name)」依赖组件 (\(vCol.components.count))")
+                        .font(.system(size: 13, weight: .semibold))
+                    if let desc = vCol.description, !desc.isEmpty {
+                        Text("— \(desc)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    TextField("搜索组件名称…", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                    Button("＋ 添加组件") {
+                        addCompName = ""
+                        addCompVersion = "0.1.0"
+                        addCompMode = table.defaultMode
+                        addCompPath = ""
+                        addCompBranch = ""
+                        isShowingAddCompSheet = true
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+
+                Divider()
+
+                // D. 组件依赖行编辑表格
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(vCol.components.enumerated()), id: \.element.name) { compIdx, entry in
+                            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                entry.name.localizedCaseInsensitiveContains(searchText) {
+                                adminComponentRow(
+                                    tableIndex: tableIndex,
+                                    columnIndex: vIdx,
+                                    componentIndex: compIdx,
+                                    entry: entry
+                                )
+                                Divider()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func adminComponentRow(
+        tableIndex: Int,
+        columnIndex: Int,
+        componentIndex: Int,
+        entry: ComponentConfigEntry
+    ) -> some View {
+        HStack(spacing: 12) {
+            Toggle("", isOn: Binding(
+                get: { entry.enabled },
+                set: { newVal in
+                    model.adminConfigTables[tableIndex].columns?[columnIndex].components[componentIndex].enabled = newVal
+                    syncActiveColumnIfNeeded(tableIndex: tableIndex, columnIndex: columnIndex)
+                }
+            ))
+            .labelsHidden()
+            .toggleStyle(.checkbox)
+
+            Text(entry.name)
+                .font(.system(size: 13.5, weight: .semibold))
+                .frame(width: 160, alignment: .leading)
+
+            Picker("", selection: Binding(
+                get: { entry.mode },
+                set: { newMode in
+                    model.adminConfigTables[tableIndex].columns?[columnIndex].components[componentIndex].mode = newMode
+                    syncActiveColumnIfNeeded(tableIndex: tableIndex, columnIndex: columnIndex)
+                }
+            )) {
+                Text("本地").tag("local")
+                Text("源码").tag("source")
+                Text("二进制").tag("binary")
+                Text("分支").tag("branch")
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+
+            HStack(spacing: 4) {
+                Text("版本:").font(.caption).foregroundStyle(.secondary)
+                TextField("版本", text: Binding(
+                    get: { entry.version ?? "" },
+                    set: { newVer in
+                        model.adminConfigTables[tableIndex].columns?[columnIndex].components[componentIndex].version = newVer
+                        syncActiveColumnIfNeeded(tableIndex: tableIndex, columnIndex: columnIndex)
+                    }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 110)
+            }
+
+            if entry.mode == "local" {
+                HStack(spacing: 4) {
+                    Text("路径:").font(.caption).foregroundStyle(.secondary)
+                    TextField("../\(entry.name)", text: Binding(
+                        get: { entry.path ?? "" },
+                        set: { newPath in
+                            model.adminConfigTables[tableIndex].columns?[columnIndex].components[componentIndex].path = newPath
+                            syncActiveColumnIfNeeded(tableIndex: tableIndex, columnIndex: columnIndex)
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 140)
+                }
+            } else if entry.mode == "branch" {
+                HStack(spacing: 4) {
+                    Text("分支:").font(.caption).foregroundStyle(.secondary)
+                    TextField("main", text: Binding(
+                        get: { entry.branch ?? "" },
+                        set: { newBranch in
+                            model.adminConfigTables[tableIndex].columns?[columnIndex].components[componentIndex].branch = newBranch
+                            syncActiveColumnIfNeeded(tableIndex: tableIndex, columnIndex: columnIndex)
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 140)
+                }
+            } else {
+                Spacer()
+            }
+
+            Spacer()
+
+            Button(role: .destructive) {
+                model.adminConfigTables[tableIndex].columns?[columnIndex].components.remove(at: componentIndex)
+                syncActiveColumnIfNeeded(tableIndex: tableIndex, columnIndex: columnIndex)
+            } label: {
+                Image(systemName: "xmark.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("从当前版本列移除组件 \(entry.name)")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private func syncActiveColumnIfNeeded(tableIndex: Int, columnIndex: Int) {
+        guard let col = model.adminConfigTables[tableIndex].columns?[columnIndex] else { return }
+        if col.name == model.adminConfigTables[tableIndex].currentColumnName {
+            model.adminConfigTables[tableIndex].components = col.components
+        }
+    }
+
+    private func addOrDuplicateColumnInCurrentAdminTable() {
+        guard let tIdx = selectedTableIndex else { return }
+        let trimmed = newColName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        model.adminConfigTables[tIdx].ensureColumnsInitialized()
+        if model.adminConfigTables[tIdx].columns?.contains(where: { $0.name == trimmed }) == true {
+            model.adminStatusMessage = "错误：版本列 \(trimmed) 已存在"
+            return
+        }
+        let now = ISO8601DateFormatter().string(from: Date())
+        let copiedComponents: [ComponentConfigEntry]
+        if !newColCopyFrom.isEmpty,
+           let srcCol = model.adminConfigTables[tIdx].columns?.first(where: { $0.name == newColCopyFrom }) {
+            copiedComponents = srcCol.components
+        } else {
+            copiedComponents = []
+        }
+        let newCol = ComponentConfigColumn(
+            name: trimmed,
+            description: newColDesc.isEmpty ? nil : newColDesc,
+            createdAt: now,
+            updatedAt: now,
+            components: copiedComponents
+        )
+        model.adminConfigTables[tIdx].columns?.append(newCol)
+        if newColSetActive {
+            model.adminConfigTables[tIdx].activeColumn = trimmed
+            model.adminConfigTables[tIdx].components = copiedComponents
+        }
+        model.selectedAdminColumnName = trimmed
+        model.adminSaveTable(model.adminConfigTables[tIdx])
+    }
+
+    private func deleteColumnInCurrentAdminTable(columnName: String, tableIndex: Int) {
+        guard (model.adminConfigTables[tableIndex].columns?.count ?? 0) > 1 else { return }
+        model.adminConfigTables[tableIndex].columns?.removeAll { $0.name == columnName }
+        if let first = model.adminConfigTables[tableIndex].columns?.first {
+            if model.adminConfigTables[tableIndex].activeColumn == columnName {
+                model.adminConfigTables[tableIndex].activeColumn = first.name
+                model.adminConfigTables[tableIndex].components = first.components
+            }
+            if model.selectedAdminColumnName == columnName {
+                model.selectedAdminColumnName = first.name
+            }
+        }
+        model.adminSaveTable(model.adminConfigTables[tableIndex])
+    }
+
+    private func appendComponentToCurrentAdminColumn() {
+        guard let tIdx = selectedTableIndex,
+              let cols = model.adminConfigTables[tIdx].columns,
+              let cIdx = cols.firstIndex(where: { $0.name == model.selectedAdminColumnName }) else { return }
+        let cleanName = addCompName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else { return }
+        if cols[cIdx].components.contains(where: { $0.name == cleanName }) {
+            model.adminStatusMessage = "组件 \(cleanName) 已存在于当前版本列"
+            return
+        }
+        let entry = ComponentConfigEntry(
+            name: cleanName,
+            version: addCompVersion.trimmingCharacters(in: .whitespacesAndNewlines),
+            mode: addCompMode,
+            path: addCompPath.isEmpty ? "../\(cleanName)" : addCompPath,
+            branch: addCompBranch.isEmpty ? nil : addCompBranch,
+            enabled: true
+        )
+        model.adminConfigTables[tIdx].columns?[cIdx].components.append(entry)
+        syncActiveColumnIfNeeded(tableIndex: tIdx, columnIndex: cIdx)
+        model.adminSaveTable(model.adminConfigTables[tIdx])
     }
 }

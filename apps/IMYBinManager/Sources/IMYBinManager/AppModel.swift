@@ -152,6 +152,12 @@ final class AppModel: ObservableObject {
     @Published var isAppLogDrawerExpanded = false
     @Published var isComponentLogDrawerExpanded = false
     @Published var isToolboxSheetPresented = false
+    @Published var isConfigTableAdminPresented = false
+    @Published var adminConfigTables: [ComponentConfigTable] = []
+    @Published var selectedAdminTableProject: String = ""
+    @Published var selectedAdminColumnName: String = ""
+    @Published var isAdminLoading: Bool = false
+    @Published var adminStatusMessage: String? = nil
     @Published var consoleFontSize: CGFloat = 13.5
 
     func increaseConsoleFontSize() {
@@ -2024,6 +2030,284 @@ final class AppModel: ObservableObject {
                     env["RUBYLIB"] = existing.isEmpty ? pluginLib.path : "\(pluginLib.path):\(existing)"
                 }
             }
+        }
+    }
+
+    // MARK: - 配置表管理后台 (Config Table Admin Center)
+
+    var currentAdminTable: ComponentConfigTable? {
+        adminConfigTables.first(where: { $0.project == selectedAdminTableProject }) ?? adminConfigTables.first
+    }
+
+    func openConfigTableAdmin() {
+        isConfigTableAdminPresented = true
+        refreshAdminConfigTables()
+    }
+
+    func openWebAdminDashboard() {
+        if let url = try? BinaryServerClient.dashboardURL(from: binaryServerAddress) {
+            NSWorkspace.shared.open(url)
+        } else if let fallback = URL(string: "http://127.0.0.1:8080/dashboard") {
+            NSWorkspace.shared.open(fallback)
+        }
+    }
+
+    func refreshAdminConfigTables() {
+        isAdminLoading = true
+        adminStatusMessage = nil
+
+        // 先确保本地工作区配置表在列表中可见（即使服务端暂未启动也可直接管理）
+        var localTables: [ComponentConfigTable] = []
+        if let local = configTable {
+            var normalized = local
+            if normalized.project.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                normalized.project = selectedAppDirectory?.lastPathComponent ?? "LocalApp"
+            }
+            normalized.ensureColumnsInitialized()
+            localTables.append(normalized)
+        }
+
+        let address = binaryServerAddress
+        Task {
+            do {
+                let remoteTables = try await binaryServerClient.listConfigTables(address: address)
+                var merged = remoteTables
+                for local in localTables {
+                    if !merged.contains(where: { $0.project == local.project }) {
+                        merged.append(local)
+                    }
+                }
+                self.adminConfigTables = merged
+                self.ensureAdminSelectionValid()
+                self.isAdminLoading = false
+                self.adminStatusMessage = "已连接服务端管理后台 (\(merged.count) 个工程配置表)"
+            } catch {
+                if self.adminConfigTables.isEmpty {
+                    self.adminConfigTables = localTables
+                } else {
+                    for local in localTables where !self.adminConfigTables.contains(where: { $0.project == local.project }) {
+                        self.adminConfigTables.append(local)
+                    }
+                }
+                self.ensureAdminSelectionValid()
+                self.isAdminLoading = false
+                self.adminStatusMessage = "本地管理模式（服务端未连接，修改将保存在本地配置表）"
+            }
+        }
+    }
+
+    private func ensureAdminSelectionValid() {
+        if selectedAdminTableProject.isEmpty || !adminConfigTables.contains(where: { $0.project == selectedAdminTableProject }) {
+            selectedAdminTableProject = configTable?.project ?? adminConfigTables.first?.project ?? ""
+        }
+        if let table = currentAdminTable {
+            let cols = table.columns ?? []
+            if selectedAdminColumnName.isEmpty || !cols.contains(where: { $0.name == selectedAdminColumnName }) {
+                selectedAdminColumnName = table.currentColumnName
+            }
+        }
+    }
+
+    func selectAdminProject(_ project: String) {
+        selectedAdminTableProject = project
+        if let table = adminConfigTables.first(where: { $0.project == project }) {
+            selectedAdminColumnName = table.currentColumnName
+        }
+    }
+
+    func adminCreateConfigTable(
+        project: String,
+        initialColumn: String,
+        defaultMode: String,
+        environment: String,
+        copyFromProject: String? = nil
+    ) {
+        let cleanProject = project.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanCol = initialColumn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "1.0.0"
+            : initialColumn.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanProject.isEmpty else {
+            adminStatusMessage = "错误：工程名称不能为空"
+            return
+        }
+        if adminConfigTables.contains(where: { $0.project == cleanProject }) {
+            adminStatusMessage = "错误：已存在同名配置表 \(cleanProject)"
+            return
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        let newTable: ComponentConfigTable
+        if let sourceProj = copyFromProject,
+           !sourceProj.isEmpty,
+           let sourceTable = adminConfigTables.first(where: { $0.project == sourceProj }) {
+            newTable = ComponentConfigTable(
+                version: sourceTable.version,
+                project: cleanProject,
+                environment: environment,
+                defaultMode: defaultMode,
+                updatedAt: now,
+                activeColumn: sourceTable.activeColumn,
+                columns: sourceTable.columns,
+                components: sourceTable.components
+            )
+        } else {
+            let starterComponents = componentPodspecs.map { spec in
+                ComponentConfigEntry(
+                    name: spec.name,
+                    version: spec.version,
+                    mode: defaultMode,
+                    path: "../\(spec.name)",
+                    enabled: true
+                )
+            }
+            let col = ComponentConfigColumn(
+                name: cleanCol,
+                description: "\(cleanCol) 初始发版基线",
+                createdAt: now,
+                updatedAt: now,
+                components: starterComponents
+            )
+            newTable = ComponentConfigTable(
+                version: 1,
+                project: cleanProject,
+                environment: environment,
+                defaultMode: defaultMode,
+                updatedAt: now,
+                activeColumn: cleanCol,
+                columns: [col],
+                components: starterComponents
+            )
+        }
+
+        adminConfigTables.insert(newTable, at: 0)
+        selectedAdminTableProject = cleanProject
+        selectedAdminColumnName = newTable.currentColumnName
+        adminStatusMessage = "已创建配置表：\(cleanProject)"
+
+        let address = binaryServerAddress
+        Task {
+            if let saved = try? await binaryServerClient.createConfigTable(address: address, table: newTable) {
+                if let idx = self.adminConfigTables.firstIndex(where: { $0.project == cleanProject }) {
+                    self.adminConfigTables[idx] = saved
+                }
+                self.adminStatusMessage = "已创建并同步配置表 \(cleanProject) 到管理后台"
+            }
+        }
+    }
+
+    func adminDuplicateConfigTable(sourceProject: String, targetProject: String) {
+        let cleanTarget = targetProject.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTarget.isEmpty else {
+            adminStatusMessage = "错误：目标配置表名称不能为空"
+            return
+        }
+        guard let sourceTable = adminConfigTables.first(where: { $0.project == sourceProject }) else {
+            adminStatusMessage = "错误：未找到源配置表 \(sourceProject)"
+            return
+        }
+        if adminConfigTables.contains(where: { $0.project == cleanTarget }) {
+            adminStatusMessage = "错误：目标配置表 \(cleanTarget) 已存在"
+            return
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        let cloned = ComponentConfigTable(
+            version: sourceTable.version,
+            project: cleanTarget,
+            environment: sourceTable.environment,
+            defaultMode: sourceTable.defaultMode,
+            updatedAt: now,
+            activeColumn: sourceTable.activeColumn,
+            columns: sourceTable.columns,
+            components: sourceTable.components
+        )
+        adminConfigTables.insert(cloned, at: 0)
+        selectedAdminTableProject = cleanTarget
+        selectedAdminColumnName = cloned.currentColumnName
+        adminStatusMessage = "已复制配置表 \(sourceProject) -> \(cleanTarget)"
+
+        let address = binaryServerAddress
+        Task {
+            if let remoteCloned = try? await binaryServerClient.duplicateConfigTable(
+                address: address,
+                project: sourceProject,
+                targetProject: cleanTarget
+            ) {
+                if let idx = self.adminConfigTables.firstIndex(where: { $0.project == cleanTarget }) {
+                    self.adminConfigTables[idx] = remoteCloned
+                }
+                self.adminStatusMessage = "已成功复制配置表 \(sourceProject) -> \(cleanTarget) 并同步到服务端"
+            } else if let remoteCreated = try? await binaryServerClient.pushConfigTable(address: address, table: cloned) {
+                if let idx = self.adminConfigTables.firstIndex(where: { $0.project == cleanTarget }) {
+                    self.adminConfigTables[idx] = remoteCreated
+                }
+            }
+        }
+    }
+
+    func adminDeleteConfigTable(project: String) {
+        adminConfigTables.removeAll { $0.project == project }
+        ensureAdminSelectionValid()
+        adminStatusMessage = "已删除配置表 \(project)"
+
+        let address = binaryServerAddress
+        Task {
+            try? await binaryServerClient.deleteConfigTable(address: address, project: project)
+        }
+    }
+
+    func adminSaveTable(_ updatedTable: ComponentConfigTable, syncToLocalIfMatched: Bool = true) {
+        var table = updatedTable
+        table.ensureColumnsInitialized()
+        if let activeName = table.activeColumn,
+           let activeCol = table.columns?.first(where: { $0.name == activeName }) {
+            table.components = activeCol.components
+        }
+        table.updatedAt = ISO8601DateFormatter().string(from: Date())
+
+        if let idx = adminConfigTables.firstIndex(where: { $0.project == table.project }) {
+            adminConfigTables[idx] = table
+        } else {
+            adminConfigTables.append(table)
+        }
+
+        // 若对应当前本地工程，同步写回本地 .imy-bin-config.json
+        if syncToLocalIfMatched,
+           let appDir = selectedAppDirectory,
+           (appDir.lastPathComponent == table.project || configTable?.project == table.project) {
+            configTable = table
+            try? table.write(to: appDir)
+            reloadAppDirectoryState()
+        }
+
+        adminStatusMessage = "✅ 已保存配置表 \(table.project)"
+
+        let address = binaryServerAddress
+        Task {
+            if let remoteSaved = try? await binaryServerClient.pushConfigTable(address: address, table: table) {
+                if let idx = self.adminConfigTables.firstIndex(where: { $0.project == table.project }) {
+                    self.adminConfigTables[idx] = remoteSaved
+                }
+                self.adminStatusMessage = "✅ 配置表 \(table.project) 已保存到服务端与本地"
+            }
+        }
+    }
+
+    func adminApplyTableToLocalWorkspace(_ table: ComponentConfigTable) {
+        guard let appDir = requireAppDirectory() else { return }
+        var applied = table
+        applied.ensureColumnsInitialized()
+        if let activeName = applied.activeColumn,
+           let activeCol = applied.columns?.first(where: { $0.name == activeName }) {
+            applied.components = activeCol.components
+        }
+        do {
+            try applied.write(to: appDir)
+            configTable = applied
+            reloadAppDirectoryState()
+            adminStatusMessage = "✅ 已将配置表「\(table.project)」(\(applied.currentColumnName)) 应用到当前工程 \(appDir.lastPathComponent)"
+        } catch {
+            adminStatusMessage = "应用到本地工程失败：\(error.localizedDescription)"
         }
     }
 }

@@ -1088,14 +1088,16 @@ function renderDashboardHtml() {
     function renderComponentsTable(components) {
       const tbody = document.getElementById('components-tbody');
       const filter = (document.getElementById('component-filter').value || '').toLowerCase().trim();
-      const filtered = components.filter(c => !filter || c.name.toLowerCase().includes(filter));
+      const filtered = components
+        .map((c, idx) => ({ c, idx }))
+        .filter(({ c }) => !filter || c.name.toLowerCase().includes(filter));
 
       if (filtered.length === 0) {
         tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-muted);text-align:center;padding:24px;">' + (filter ? '无匹配组件' : '当前版本列暂无组件依赖，点击上方“＋ 添加组件”') + '</td></tr>';
         return;
       }
 
-      tbody.innerHTML = filtered.map((c, idx) => {
+      tbody.innerHTML = filtered.map(({ c, idx }) => {
         const modeClass = 'mode-' + (c.mode || 'binary');
         const isBranch = c.mode === 'branch';
         const isLocal = c.mode === 'local';
@@ -1356,7 +1358,7 @@ function renderDashboardHtml() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             targetColumn: colName,
-            sourceColumn: sourceCol || state.viewingColumn,
+            sourceColumn: sourceCol,
             description: desc,
             setActive,
           }),

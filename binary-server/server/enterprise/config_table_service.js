@@ -48,8 +48,24 @@ function normalizeDoc(doc) {
   }
 }
 
+let dbSeeded = false
+
+async function ensureDbSeeded() {
+  if (!isDbConnected() || dbSeeded) return
+  dbSeeded = true
+  try {
+    const count = await ConfigTable.countDocuments().exec()
+    if (count === 0 && ConfigTable._defaultSeed) {
+      await ConfigTable.create(ConfigTable._defaultSeed)
+    }
+  } catch {
+    // Ignore seed errors on concurrent startup
+  }
+}
+
 async function listConfigTables() {
   if (isDbConnected()) {
+    await ensureDbSeeded()
     const docs = await ConfigTable.find({}).sort({ updatedAt: -1 }).lean().exec()
     return docs.map(normalizeDoc)
   }
@@ -58,6 +74,7 @@ async function listConfigTables() {
 
 async function getConfigTable(project) {
   if (isDbConnected()) {
+    await ensureDbSeeded()
     const doc = await ConfigTable.findOne({ project }).lean().exec()
     return doc ? normalizeDoc(doc) : null
   }
@@ -146,6 +163,9 @@ async function createConfigTable(payload, actor = 'admin') {
 async function updateConfigTable(project, payload, actor = 'admin') {
   const current = await getConfigTable(project)
   if (!current) {
+    if (payload && (payload.upsert || Array.isArray(payload.columns) || Array.isArray(payload.components))) {
+      return createConfigTable({ ...payload, project }, actor)
+    }
     const err = new Error(`Configuration table for project '${project}' not found`)
     err.status = 404
     throw err
@@ -246,28 +266,32 @@ async function duplicateConfigTable(project, options = {}, actor = 'admin') {
     return created
   }
 
-  // Case 2: Duplicate an App version column within the same project
+  // Case 2: Duplicate or add an App version column within the same project
   if (options.targetColumn && options.targetColumn.trim()) {
     const targetColName = options.targetColumn.trim()
-    const sourceColName = options.sourceColumn || source.activeColumn
-    const sourceCol = source.columns.find(c => c.name === sourceColName)
-    if (!sourceCol) {
-      const err = new Error(`Source column '${sourceColName}' not found in project '${project}'`)
-      err.status = 404
-      throw err
-    }
-
     if (source.columns.some(c => c.name === targetColName)) {
       const err = new Error(`Column '${targetColName}' already exists in project '${project}'`)
       err.status = 409
       throw err
     }
 
+    const isBlankBaseline = options.sourceColumn === ''
+    const sourceColName = isBlankBaseline ? null : (options.sourceColumn || source.activeColumn)
+    let clonedComponents = []
+    if (sourceColName) {
+      const sourceCol = source.columns.find(c => c.name === sourceColName)
+      if (!sourceCol) {
+        const err = new Error(`Source column '${sourceColName}' not found in project '${project}'`)
+        err.status = 404
+        throw err
+      }
+      clonedComponents = JSON.parse(JSON.stringify(sourceCol.components || []))
+    }
+
     const now = new Date()
-    const clonedComponents = JSON.parse(JSON.stringify(sourceCol.components || []))
     const newColumn = {
       name: targetColName,
-      description: options.description || `由 ${sourceColName} 复制创建的 App 版本基线`,
+      description: options.description || (sourceColName ? `由 ${sourceColName} 复制创建的 App 版本基线` : `${targetColName} App 版本基线`),
       createdAt: now,
       updatedAt: now,
       components: clonedComponents,

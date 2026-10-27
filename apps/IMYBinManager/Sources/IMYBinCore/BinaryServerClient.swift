@@ -177,6 +177,63 @@ public struct BinaryServerClient: Sendable {
         return try JSONDecoder().decode(ComponentConfigTable.self, from: data)
     }
 
+    public static func dashboardURL(from address: String) throws -> URL {
+        let base = try frameworksURL(from: address).deletingLastPathComponent()
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            throw BinaryServerClientError.invalidAddress
+        }
+        let cleanPath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let prefix = cleanPath.isEmpty ? "" : "/\(cleanPath)"
+        components.path = "\(prefix)/dashboard"
+        guard let url = components.url else {
+            throw BinaryServerClientError.invalidAddress
+        }
+        return url
+    }
+
+    public func createConfigTable(address: String, table: ComponentConfigTable, token: String? = nil) async throws -> ComponentConfigTable {
+        let url = try Self.configTableURL(from: address)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try JSONEncoder().encode(table)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BinaryServerClientError.unexpectedResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data.prefix(500), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BinaryServerClientError.httpStatus(httpResponse.statusCode, message)
+        }
+        return try JSONDecoder().decode(ComponentConfigTable.self, from: data)
+    }
+
+    public func deleteConfigTable(address: String, project: String, token: String? = nil) async throws {
+        let url = try Self.configTableURL(from: address, project: project)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BinaryServerClientError.unexpectedResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data.prefix(500), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BinaryServerClientError.httpStatus(httpResponse.statusCode, message)
+        }
+    }
+
     public func pushConfigTable(address: String, table: ComponentConfigTable, token: String? = nil) async throws -> ComponentConfigTable {
         let url = try Self.configTableURL(from: address, project: table.project)
         var request = URLRequest(url: url)

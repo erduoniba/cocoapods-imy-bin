@@ -101,5 +101,6 @@ inMemoryTables.set(defaultSeed.project, defaultSeed)
 const ConfigTableModel = mongoose.models.ConfigTable || mongoose.model('ConfigTable', ConfigTableSchema)
 
 ConfigTableModel._inMemoryTables = inMemoryTables
+ConfigTableModel._defaultSeed = defaultSeed
 
 module.exports = ConfigTableModel
