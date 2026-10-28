@@ -234,6 +234,104 @@ public struct BinaryServerClient: Sendable {
         }
     }
 
+    public struct ConfigTableSyncDelta: Encodable, Sendable {
+        public let action: String
+        public var column: String?
+        public var allColumns: Bool?
+        public var component: ComponentConfigEntry?
+        public var componentName: String?
+        public var columnData: ComponentConfigColumn?
+        public var columnName: String?
+        public var oldName: String?
+        public var newName: String?
+        public var activeColumn: String?
+        public var setActive: Bool?
+        public var deletedColumns: [String]?
+        public var table: ComponentConfigTable?
+
+        enum CodingKeys: String, CodingKey {
+            case action, column, allColumns, component, componentName, columnName, oldName, newName, activeColumn, setActive, deletedColumns, table
+        }
+
+        public init(
+            action: String = "merge_table",
+            column: String? = nil,
+            allColumns: Bool? = nil,
+            component: ComponentConfigEntry? = nil,
+            componentName: String? = nil,
+            columnData: ComponentConfigColumn? = nil,
+            columnName: String? = nil,
+            oldName: String? = nil,
+            newName: String? = nil,
+            activeColumn: String? = nil,
+            setActive: Bool? = nil,
+            deletedColumns: [String]? = nil,
+            table: ComponentConfigTable? = nil
+        ) {
+            self.action = action
+            self.column = column
+            self.allColumns = allColumns
+            self.component = component
+            self.componentName = componentName
+            self.columnData = columnData
+            self.columnName = columnName
+            self.oldName = oldName
+            self.newName = newName
+            self.activeColumn = activeColumn
+            self.setActive = setActive
+            self.deletedColumns = deletedColumns
+            self.table = table
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(action, forKey: .action)
+            if let columnData {
+                try container.encode(columnData, forKey: .column)
+            } else {
+                try container.encodeIfPresent(column, forKey: .column)
+            }
+            try container.encodeIfPresent(allColumns, forKey: .allColumns)
+            try container.encodeIfPresent(component, forKey: .component)
+            try container.encodeIfPresent(componentName, forKey: .componentName)
+            try container.encodeIfPresent(columnName, forKey: .columnName)
+            try container.encodeIfPresent(oldName, forKey: .oldName)
+            try container.encodeIfPresent(newName, forKey: .newName)
+            try container.encodeIfPresent(activeColumn, forKey: .activeColumn)
+            try container.encodeIfPresent(setActive, forKey: .setActive)
+            try container.encodeIfPresent(deletedColumns, forKey: .deletedColumns)
+            try container.encodeIfPresent(table, forKey: .table)
+        }
+    }
+
+    public func syncConfigTableDelta(
+        address: String,
+        project: String,
+        delta: ConfigTableSyncDelta,
+        token: String? = nil
+    ) async throws -> ComponentConfigTable {
+        let url = try Self.configTableURL(from: address, project: project, subpath: "sync")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try JSONEncoder().encode(delta)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BinaryServerClientError.unexpectedResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data.prefix(500), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BinaryServerClientError.httpStatus(httpResponse.statusCode, message)
+        }
+        return try JSONDecoder().decode(ComponentConfigTable.self, from: data)
+    }
+
     public func pushConfigTable(address: String, table: ComponentConfigTable, token: String? = nil) async throws -> ComponentConfigTable {
         let url = try Self.configTableURL(from: address, project: table.project)
         var request = URLRequest(url: url)

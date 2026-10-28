@@ -342,6 +342,167 @@ async function deleteConfigTable(project, actor = 'admin') {
   return { success: true, project }
 }
 
+/**
+ * 细粒度增量与智能合并同步接口：
+ * 支持本地修改组件版本、增删重命名版本列、增删组件时立即同步到云端，
+ * 同时避免多人并发维护时整表覆盖导致的改动丢失。
+ */
+async function syncConfigTableDelta(project, delta = {}, actor = 'local-sync') {
+  const current = await getConfigTable(project)
+  if (!current) {
+    if (delta.table) {
+      return createConfigTable({ ...delta.table, project }, actor)
+    }
+    const err = new Error(`Configuration table for project '${project}' not found`)
+    err.status = 404
+    throw err
+  }
+
+  const now = new Date()
+  const action = delta.action || 'merge_table'
+  let columns = JSON.parse(JSON.stringify(current.columns || []))
+  let activeColumn = current.activeColumn
+  let defaultMode = delta.defaultMode || current.defaultMode
+  let environment = delta.environment || current.environment
+
+  if (action === 'update_component' && delta.component && delta.component.name) {
+    const comp = delta.component
+    const targetColName = (typeof delta.column === 'string' && delta.column) || delta.columnName || activeColumn
+    const updateAllCols = Boolean(delta.allColumns)
+
+    columns.forEach((col) => {
+      if (updateAllCols || col.name === targetColName) {
+        col.components = col.components || []
+        const idx = col.components.findIndex(c => c.name === comp.name)
+        if (idx >= 0) {
+          col.components[idx] = { ...col.components[idx], ...comp }
+        } else {
+          col.components.push(comp)
+        }
+        col.components.sort((a, b) => a.name.localeCompare(b.name))
+        col.updatedAt = now
+      }
+    })
+  } else if (action === 'remove_component' && delta.componentName) {
+    const targetColName = (typeof delta.column === 'string' && delta.column) || delta.columnName || activeColumn
+    const col = columns.find(c => c.name === targetColName)
+    if (col && Array.isArray(col.components)) {
+      col.components = col.components.filter(c => c.name !== delta.componentName)
+      col.updatedAt = now
+    }
+  } else if (action === 'add_column' && ((delta.column && delta.column.name) || delta.columnName)) {
+    const newCol = (delta.column && delta.column.name)
+      ? delta.column
+      : {
+          name: delta.columnName,
+          description: delta.description,
+          components: delta.sourceColumn
+            ? JSON.parse(JSON.stringify((columns.find(c => c.name === delta.sourceColumn) || {}).components || []))
+            : [],
+        }
+    const existingIdx = columns.findIndex(c => c.name === newCol.name)
+    if (existingIdx >= 0) {
+      columns[existingIdx] = {
+        ...columns[existingIdx],
+        ...newCol,
+        updatedAt: now,
+      }
+    } else {
+      columns.push({
+        name: newCol.name,
+        description: newCol.description || `${newCol.name} App 版本基线`,
+        createdAt: now,
+        updatedAt: now,
+        components: newCol.components || [],
+      })
+    }
+    if (delta.activeColumn) {
+      activeColumn = delta.activeColumn
+    } else if (delta.setActive !== false) {
+      activeColumn = newCol.name
+    }
+  } else if (action === 'delete_column' && (delta.columnName || (typeof delta.column === 'string' && delta.column))) {
+    const colToDelete = delta.columnName || delta.column
+    if (columns.length > 1) {
+      columns = columns.filter(c => c.name !== colToDelete)
+      if (activeColumn === colToDelete) {
+        activeColumn = delta.activeColumn || columns[0].name
+      }
+    }
+  } else if (action === 'rename_column' && delta.oldName && delta.newName) {
+    const target = columns.find(c => c.name === delta.oldName)
+    const conflict = columns.some(c => c.name === delta.newName)
+    if (target && !conflict) {
+      target.name = delta.newName
+      target.updatedAt = now
+      if (activeColumn === delta.oldName) {
+        activeColumn = delta.newName
+      }
+    }
+  } else if (action === 'switch_column' && delta.activeColumn) {
+    if (columns.some(c => c.name === delta.activeColumn)) {
+      activeColumn = delta.activeColumn
+    }
+  } else if (delta.table) {
+    const incoming = delta.table
+    if (incoming.activeColumn) activeColumn = incoming.activeColumn
+    if (incoming.defaultMode) defaultMode = incoming.defaultMode
+    if (incoming.environment) environment = incoming.environment
+
+    const deletedCols = new Set(Array.isArray(delta.deletedColumns) ? delta.deletedColumns : [])
+    if (deletedCols.size > 0) {
+      columns = columns.filter(c => !deletedCols.has(c.name))
+    }
+
+    const incomingCols = Array.isArray(incoming.columns) ? incoming.columns : []
+    for (const inCol of incomingCols) {
+      if (!inCol || !inCol.name || deletedCols.has(inCol.name)) continue
+      const srvIdx = columns.findIndex(c => c.name === inCol.name)
+      if (srvIdx < 0) {
+        columns.push({
+          name: inCol.name,
+          description: inCol.description || '',
+          createdAt: inCol.createdAt || now,
+          updatedAt: now,
+          components: inCol.components || [],
+        })
+      } else {
+        const srvCol = columns[srvIdx]
+        const mergedMap = new Map()
+        for (const c of (srvCol.components || [])) {
+          mergedMap.set(c.name, { ...c })
+        }
+        for (const c of (inCol.components || [])) {
+          const prev = mergedMap.get(c.name) || {}
+          mergedMap.set(c.name, { ...prev, ...c })
+        }
+        // If incoming explicitly removed components in the active column when forceSyncComponents is set
+        if (delta.replaceComponentsInColumn === inCol.name) {
+          srvCol.components = inCol.components || []
+        } else {
+          srvCol.components = Array.from(mergedMap.values()).sort((a, b) => a.name.localeCompare(b.name))
+        }
+        if (inCol.description !== undefined) srvCol.description = inCol.description
+        srvCol.updatedAt = now
+      }
+    }
+  }
+
+  const activeColObj = columns.find(c => c.name === activeColumn) || columns[0]
+  if (activeColObj) {
+    activeColumn = activeColObj.name
+  }
+  const components = activeColObj ? (activeColObj.components || []) : (current.components || [])
+
+  return updateConfigTable(project, {
+    activeColumn,
+    defaultMode,
+    environment,
+    columns,
+    components,
+  }, actor)
+}
+
 module.exports = {
   listConfigTables,
   getConfigTable,
@@ -349,5 +510,6 @@ module.exports = {
   updateConfigTable,
   duplicateConfigTable,
   deleteConfigTable,
+  syncConfigTableDelta,
   normalizeDoc,
 }

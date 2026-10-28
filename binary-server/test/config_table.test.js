@@ -170,6 +170,68 @@ test('config table HTTP endpoints handle list, get, create, update, duplicate, a
     const dupTableData = await dupTableRes.json()
     assert.equal(dupTableData.project, dupTableProj)
 
+    // POST /api/v1/config-tables/:project/sync (Atomic delta sync: component version update & column ops)
+    // Developer A updates Component A version in 1.0.0
+    const syncCompRes1 = await fetch(`${base}/api/v1/config-tables/${httpProject}/sync`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_component',
+        columnName: '1.0.0',
+        component: { name: 'A', mode: 'binary', version: '0.2.0', enabled: true },
+      }),
+    })
+    assert.equal(syncCompRes1.status, 200)
+    const syncCompData1 = await syncCompRes1.json()
+    assert.equal(syncCompData1.columns.find(c => c.name === '1.0.0').components.find(c => c.name === 'A').version, '0.2.0')
+
+    // Developer B concurrently adds Component B in 1.0.0 without overwriting Component A's 0.2.0 update
+    const syncCompRes2 = await fetch(`${base}/api/v1/config-tables/${httpProject}/sync`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_component',
+        columnName: '1.0.0',
+        component: { name: 'B', mode: 'source', version: '1.5.0', enabled: true },
+      }),
+    })
+    assert.equal(syncCompRes2.status, 200)
+    const syncCompData2 = await syncCompRes2.json()
+    const col100 = syncCompData2.columns.find(c => c.name === '1.0.0')
+    assert.equal(col100.components.length, 2)
+    assert.equal(col100.components.find(c => c.name === 'A').version, '0.2.0')
+    assert.equal(col100.components.find(c => c.name === 'B').version, '1.5.0')
+
+    // Developer adds a new version column 3.0.0 via sync
+    const syncAddColRes = await fetch(`${base}/api/v1/config-tables/${httpProject}/sync`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'add_column',
+        columnName: '3.0.0',
+        sourceColumn: '1.0.0',
+        description: '3.0.0 发版列',
+        activeColumn: '3.0.0',
+      }),
+    })
+    assert.equal(syncAddColRes.status, 200)
+    const syncAddColData = await syncAddColRes.json()
+    assert.equal(syncAddColData.activeColumn, '3.0.0')
+    assert.ok(syncAddColData.columns.some(c => c.name === '3.0.0'))
+
+    // Developer deletes version column 2.0.0 via sync
+    const syncDelColRes = await fetch(`${base}/api/v1/config-tables/${httpProject}/sync`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'delete_column',
+        columnName: '2.0.0',
+      }),
+    })
+    assert.equal(syncDelColRes.status, 200)
+    const syncDelColData = await syncDelColRes.json()
+    assert.equal(syncDelColData.columns.some(c => c.name === '2.0.0'), false)
+
     // DELETE /api/v1/config-tables/:project
     const delRes1 = await fetch(`${base}/api/v1/config-tables/${httpProject}`, { method: 'DELETE' })
     assert.equal(delRes1.status, 200)

@@ -600,16 +600,80 @@ final class AppModel: ObservableObject {
     // MARK: - Host App Config Table (.imy-bin-config.json)
 
     @discardableResult
-    func saveConfigTable() -> Bool {
+    func saveConfigTable(syncDelta: BinaryServerClient.ConfigTableSyncDelta? = nil) -> Bool {
         guard let appDir = requireAppDirectory() else { return false }
-        let table = configTable ?? ComponentConfigTable.loadOrBootstrap(from: appDir, workspacePodspecs: componentPodspecs)
+        var table = configTable ?? ComponentConfigTable.loadOrBootstrap(from: appDir, workspacePodspecs: componentPodspecs)
+        if table.project.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            table.project = appDir.lastPathComponent
+        }
         do {
             try table.write(to: appDir)
             reloadAppDirectoryState()
+            if let latestLocal = configTable {
+                syncLocalConfigTableToCloud(table: latestLocal, delta: syncDelta, localDirectory: appDir)
+            } else {
+                syncLocalConfigTableToCloud(table: table, delta: syncDelta, localDirectory: appDir)
+            }
             return true
         } catch {
             alertMessage = "写入配置表失败：\(error.localizedDescription)"
             return false
+        }
+    }
+
+    /// 将本地配置表的改动（组件版本变更、增删版本列、增删组件等）立即同步到云端配置表，并智能合并远端改动
+    func syncLocalConfigTableToCloud(
+        table: ComponentConfigTable,
+        delta: BinaryServerClient.ConfigTableSyncDelta? = nil,
+        localDirectory: URL? = nil
+    ) {
+        var normalized = table
+        if normalized.project.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            normalized.project = localDirectory?.lastPathComponent ?? selectedAppDirectory?.lastPathComponent ?? "LocalApp"
+        }
+        normalized.ensureColumnsInitialized()
+        normalized.syncComponentsToActiveColumn()
+
+        // 同步更新内存中的管理后台列表
+        if let idx = adminConfigTables.firstIndex(where: { $0.project == normalized.project }) {
+            adminConfigTables[idx] = normalized
+        } else {
+            adminConfigTables.insert(normalized, at: 0)
+        }
+
+        let address = binaryServerAddress
+        let projectKey = normalized.project
+        let effectiveDelta = delta ?? BinaryServerClient.ConfigTableSyncDelta(
+            action: "merge_table",
+            table: normalized
+        )
+
+        Task {
+            do {
+                let synced = try await binaryServerClient.syncConfigTableDelta(
+                    address: address,
+                    project: projectKey,
+                    delta: effectiveDelta
+                )
+                if let idx = self.adminConfigTables.firstIndex(where: { $0.project == projectKey }) {
+                    self.adminConfigTables[idx] = synced
+                }
+                // 如果当前打开的宿主工程正是该配置表，将云端合并后的最新结果回写本地（保留多端并发修改）
+                if let targetDir = localDirectory ?? self.selectedAppDirectory,
+                   targetDir.lastPathComponent == projectKey || self.configTable?.project == projectKey {
+                    self.configTable = synced
+                    try? synced.write(to: targetDir)
+                }
+                self.adminStatusMessage = "☁️ 已实时同步配置表「\(projectKey)」至云端"
+            } catch {
+                // 若增量接口不可用则回退为整表推送
+                if let pushed = try? await binaryServerClient.pushConfigTable(address: address, table: normalized) {
+                    if let idx = self.adminConfigTables.firstIndex(where: { $0.project == projectKey }) {
+                        self.adminConfigTables[idx] = pushed
+                    }
+                    self.adminStatusMessage = "☁️ 已实时同步配置表「\(projectKey)」至云端"
+                }
+            }
         }
     }
 
@@ -622,16 +686,30 @@ final class AppModel: ObservableObject {
         guard var table = configTable,
               let idx = table.components.firstIndex(where: { $0.name == componentName }) else { return }
         table.components[idx].version = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        table.syncComponentsToActiveColumn()
         configTable = table
-        _ = saveConfigTable()
+        let delta = BinaryServerClient.ConfigTableSyncDelta(
+            action: "update_component",
+            column: table.currentColumnName,
+            component: table.components[idx],
+            table: table
+        )
+        _ = saveConfigTable(syncDelta: delta)
     }
 
     func updateConfigEntryEnabled(_ componentName: String, enabled: Bool) {
         guard var table = configTable,
               let idx = table.components.firstIndex(where: { $0.name == componentName }) else { return }
         table.components[idx].enabled = enabled
+        table.syncComponentsToActiveColumn()
         configTable = table
-        _ = saveConfigTable()
+        let delta = BinaryServerClient.ConfigTableSyncDelta(
+            action: "update_component",
+            column: table.currentColumnName,
+            component: table.components[idx],
+            table: table
+        )
+        _ = saveConfigTable(syncDelta: delta)
     }
 
     func syncConfigVersionFromLocalPodspec(_ componentName: String) {
@@ -645,16 +723,29 @@ final class AppModel: ObservableObject {
         guard var table = configTable else { return }
         if table.switchActiveColumn(to: columnName) {
             configTable = table
-            _ = saveConfigTable()
+            let delta = BinaryServerClient.ConfigTableSyncDelta(
+                action: "switch_column",
+                activeColumn: columnName,
+                table: table
+            )
+            _ = saveConfigTable(syncDelta: delta)
         }
     }
 
     func createConfigTableColumn(name: String, description: String? = nil, copyFromCurrent: Bool = true) {
         guard var table = configTable else { return }
-        if table.createColumn(name: name, description: description, copyFromCurrent: copyFromCurrent) {
-            _ = table.switchActiveColumn(to: name)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if table.createColumn(name: trimmed, description: description, copyFromCurrent: copyFromCurrent) {
+            _ = table.switchActiveColumn(to: trimmed)
             configTable = table
-            _ = saveConfigTable()
+            let createdCol = table.columns?.first(where: { $0.name == trimmed })
+            let delta = BinaryServerClient.ConfigTableSyncDelta(
+                action: "add_column",
+                columnData: createdCol,
+                setActive: true,
+                table: table
+            )
+            _ = saveConfigTable(syncDelta: delta)
         } else {
             alertMessage = "创建版本列失败：列名不能为空或已存在同名列"
         }
@@ -664,7 +755,14 @@ final class AppModel: ObservableObject {
         guard var table = configTable else { return }
         if table.deleteColumn(name: name) {
             configTable = table
-            _ = saveConfigTable()
+            let delta = BinaryServerClient.ConfigTableSyncDelta(
+                action: "delete_column",
+                columnName: name,
+                activeColumn: table.currentColumnName,
+                deletedColumns: [name],
+                table: table
+            )
+            _ = saveConfigTable(syncDelta: delta)
         } else {
             alertMessage = "删除版本列失败：配置表中至少需保留一个版本列"
         }
@@ -672,9 +770,16 @@ final class AppModel: ObservableObject {
 
     func renameConfigTableColumn(from oldName: String, to newName: String) {
         guard var table = configTable else { return }
-        if table.renameColumn(from: oldName, to: newName) {
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if table.renameColumn(from: oldName, to: trimmedNew) {
             configTable = table
-            _ = saveConfigTable()
+            let delta = BinaryServerClient.ConfigTableSyncDelta(
+                action: "rename_column",
+                oldName: oldName,
+                newName: trimmedNew,
+                table: table
+            )
+            _ = saveConfigTable(syncDelta: delta)
         } else {
             alertMessage = "重命名版本列失败：新列名无效或已存在同名列"
         }
@@ -685,14 +790,22 @@ final class AppModel: ObservableObject {
         table.ensureColumnsInitialized()
         if let colIdx = table.columns?.firstIndex(where: { $0.name == columnName }),
            let compIdx = table.columns?[colIdx].components.firstIndex(where: { $0.name == componentName }) {
-            table.columns?[colIdx].components[compIdx].version = version.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanVer = version.trimmingCharacters(in: .whitespacesAndNewlines)
+            table.columns?[colIdx].components[compIdx].version = cleanVer
             if table.currentColumnName == columnName {
                 if let idx = table.components.firstIndex(where: { $0.name == componentName }) {
-                    table.components[idx].version = version.trimmingCharacters(in: .whitespacesAndNewlines)
+                    table.components[idx].version = cleanVer
                 }
             }
+            let updatedEntry = table.columns?[colIdx].components[compIdx]
             configTable = table
-            _ = saveConfigTable()
+            let delta = BinaryServerClient.ConfigTableSyncDelta(
+                action: "update_component",
+                column: columnName,
+                component: updatedEntry,
+                table: table
+            )
+            _ = saveConfigTable(syncDelta: delta)
         }
     }
 
@@ -707,8 +820,15 @@ final class AppModel: ObservableObject {
                     table.components[idx].mode = mode
                 }
             }
+            let updatedEntry = table.columns?[colIdx].components[compIdx]
             configTable = table
-            _ = saveConfigTable()
+            let delta = BinaryServerClient.ConfigTableSyncDelta(
+                action: "update_component",
+                column: columnName,
+                component: updatedEntry,
+                table: table
+            )
+            _ = saveConfigTable(syncDelta: delta)
         }
     }
 
@@ -843,6 +963,12 @@ final class AppModel: ObservableObject {
             )
             try table.write(to: exampleDir)
             reloadSelectedComponentState()
+            if var exampleTable = componentConfigTable {
+                if exampleTable.project.isEmpty || exampleTable.project.lowercased() == "example" {
+                    exampleTable.project = "\(info.name)_Example"
+                }
+                syncLocalConfigTableToCloud(table: exampleTable, localDirectory: exampleDir)
+            }
             return true
         } catch {
             alertMessage = "写入组件 Example 配置表失败：\(error.localizedDescription)"
@@ -1216,7 +1342,19 @@ final class AppModel: ObservableObject {
                 podspecs: componentPodspecs
             )
             refreshProject()
-            alertMessage = "已级联同步更新版本 \(targetVer) 至 \(updated.count) 个依赖方：\(updated.joined(separator: ", "))"
+            for appDir in hostAppDirectories {
+                if let appTable = try? ComponentConfigTable.read(from: appDir),
+                   let entry = appTable.components.first(where: { $0.name == comp.name }) {
+                    let delta = BinaryServerClient.ConfigTableSyncDelta(
+                        action: "update_component",
+                        column: appTable.currentColumnName,
+                        component: entry,
+                        table: appTable
+                    )
+                    syncLocalConfigTableToCloud(table: appTable, delta: delta, localDirectory: appDir)
+                }
+            }
+            alertMessage = "已级联同步更新版本 \(targetVer) 至 \(updated.count) 个依赖方（并已同步云端配置表）：\(updated.joined(separator: ", "))"
         } catch {
             alertMessage = error.localizedDescription
         }
@@ -1268,7 +1406,8 @@ final class AppModel: ObservableObject {
             configTable = imported
             try imported.write(to: appDir)
             reloadAppDirectoryState()
-            alertMessage = "已成功导入配置表：\(fileURL.lastPathComponent)"
+            syncLocalConfigTableToCloud(table: imported, localDirectory: appDir)
+            alertMessage = "已成功导入配置表并同步至云端：\(fileURL.lastPathComponent)"
         } catch {
             alertMessage = "导入配置表失败：\(error.localizedDescription)"
         }
@@ -1442,6 +1581,16 @@ final class AppModel: ObservableObject {
                         component: info.name,
                         to: targetVersion
                     )
+                    if let appTable = try? ComponentConfigTable.read(from: appDir),
+                       let entry = appTable.components.first(where: { $0.name == info.name }) {
+                        let delta = BinaryServerClient.ConfigTableSyncDelta(
+                            action: "update_component",
+                            column: appTable.currentColumnName,
+                            component: entry,
+                            table: appTable
+                        )
+                        syncLocalConfigTableToCloud(table: appTable, delta: delta, localDirectory: appDir)
+                    }
                 }
             }
             refreshProject()
@@ -1475,6 +1624,16 @@ final class AppModel: ObservableObject {
                     component: info.name,
                     to: info.version
                 )
+                if let appTable = try? ComponentConfigTable.read(from: appDir),
+                   let entry = appTable.components.first(where: { $0.name == info.name }) {
+                    let delta = BinaryServerClient.ConfigTableSyncDelta(
+                        action: "update_component",
+                        column: appTable.currentColumnName,
+                        component: entry,
+                        table: appTable
+                    )
+                    syncLocalConfigTableToCloud(table: appTable, delta: delta, localDirectory: appDir)
+                }
             }
             refreshProject()
         } catch {
@@ -1985,6 +2144,9 @@ final class AppModel: ObservableObject {
             refreshLatestArtifactReport()
             if refreshBinaryServerOnCompletion && finalExitCode == 0 {
                 refreshBinaryServer()
+                if let currentTable = configTable {
+                    syncLocalConfigTableToCloud(table: currentTable, localDirectory: selectedAppDirectory)
+                }
             }
         }
         executionTasks[scope] = task

@@ -233,6 +233,16 @@ function createEnterpriseRouter({ config }) {
     }
   })
 
+  router.post('/api/v1/config-tables/:project/sync', async (ctx) => {
+    const body = await parseJsonBody(ctx)
+    try {
+      const synced = await configTableService.syncConfigTableDelta(ctx.params.project, body, ctx.state.actor || 'local-sync')
+      ctx.body = synced
+    } catch (err) {
+      ctx.throw(err.status || 400, err.message)
+    }
+  })
+
   router.post('/api/v1/config-tables/:project/duplicate', async (ctx) => {
     const body = await parseJsonBody(ctx)
     try {
